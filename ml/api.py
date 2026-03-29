@@ -62,35 +62,60 @@ async def predict(file: UploadFile = File(...)):
     with open(temp_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
+    # 3-class label map — must match LABEL_MAP used during training
+    LABEL_MAP = {
+        0: "CN — Cognitively Normal",
+        1: "MCI — Mild Cognitive Impairment",
+        2: "AD — Alzheimer's Disease",
+    }
+    ANALYSIS_MAP = {
+        0: "The scan shows no significant patterns associated with Alzheimer's disease. Continued routine monitoring is recommended.",
+        1: "The scan shows patterns that may be consistent with Mild Cognitive Impairment. Clinical follow-up and longitudinal monitoring are advised.",
+        2: "The scan shows patterns consistent with Alzheimer's Disease. Further clinical correlation and specialist review are strongly recommended.",
+    }
+
     try:
-        # Load and preprocess
+        # Load and preprocess — matches training pipeline in train_cnn.py
         img = nib.load(temp_path)
         data = img.get_fdata()
-        mid_slice = data.shape[2] // 2
-        slice_img = data[:, :, mid_slice]
-        slice_img = tf.image.resize(slice_img[..., np.newaxis], (128, 128))
-        slice_img = (slice_img - np.min(slice_img)) / (np.max(slice_img) - np.min(slice_img) + 1e-8)
+
+        # Axis-aware slice selection (matches notebook / train_cnn.py)
+        axcodes = nib.aff2axcodes(img.affine)
+        si_axis = next((idx for idx, c in enumerate(axcodes) if c in ['S', 'I']), 2)
+        mid_slice = data.shape[si_axis] // 2
+        if si_axis == 0:
+            slice_img = data[mid_slice, :, :]
+        elif si_axis == 1:
+            slice_img = data[:, mid_slice, :]
+        else:
+            slice_img = data[:, :, mid_slice]
+
+        # Resize then normalize (add .numpy() to match training pipeline)
+        slice_img = tf.image.resize(slice_img[..., np.newaxis], (128, 128)).numpy()
+        vmin, vmax = slice_img.min(), slice_img.max()
+        slice_img = (slice_img - vmin) / (vmax - vmin + 1e-8)
         input_data = np.array([slice_img])
-        
+
         # Predict
         if model:
             prediction = model.predict(input_data)
-            class_idx = np.argmax(prediction[0])
+            class_idx = int(np.argmax(prediction[0]))
             confidence = float(prediction[0][class_idx])
-            label = "Alzheimer's Detected" if class_idx == 1 else "Normal Cognition"
+            label = LABEL_MAP.get(class_idx, f"Unknown class {class_idx}")
+            analysis = ANALYSIS_MAP.get(class_idx, "Further clinical correlation recommended.")
         else:
-            # Mock if model not trained yet
             import random
+            class_idx = random.randint(0, 2)
             confidence = random.uniform(0.7, 0.99)
-            label = "MOCK RESULT: Alzheimer's Detected"
-            
-        # External AI Integration Stub
-        analysis = f"Based on the CNN analysis, the scan shows patterns consistent with {label} ({confidence:.1%}). Further clinical correlation recommended."
-        
+            label = f"MOCK — {LABEL_MAP[class_idx]}"
+            analysis = "This is a mock result. Train the model to get real predictions."
+
         return {
             "prediction": label,
             "confidence": confidence,
-            "analysis": analysis
+            "analysis": analysis,
+            "class_index": class_idx,
+            "all_probabilities": prediction[0].tolist() if model else [],
         }
         
     except Exception as e:

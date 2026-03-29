@@ -70,37 +70,21 @@ def load_data(data_dir, labels_file, max_samples=100):
             img = nib.load(file_path)
             data = img.get_fdata()
 
-            # Determine correct orientation for Axial viewing
+            # Axis-aware slice selection: find the Superior/Inferior axis from affine
             axcodes = nib.aff2axcodes(img.affine)
-            
-            # Find the index of the Superior/Inferior axis
-            # NIfTI axcodes are ('R', 'A', 'S') or similar tuples based on affine.
-            # We want the axis that deals with S (Superior) or I (Inferior)
-            si_axis = None
-            for idx, code in enumerate(axcodes):
-                if code in ['S', 'I']:
-                    si_axis = idx
-                    break
-            
-            # If we somehow can't find it, fallback to default 3rd dimension (index 2)
-            if si_axis is None:
-                si_axis = 2
-                
-            # Take the middle slice along the identified S/I dimension
+            si_axis = next((idx for idx, c in enumerate(axcodes) if c in ['S', 'I']), 2)
+
             mid_slice_idx = data.shape[si_axis] // 2
-            
-            if si_axis == 0:
-                slice_img = data[mid_slice_idx, :, :]
-            elif si_axis == 1:
-                slice_img = data[:, mid_slice_idx, :]
-            else:
-                slice_img = data[:, :, mid_slice_idx]
-            
-            # Resize using TF image
-            slice_img = tf.image.resize(slice_img[..., np.newaxis], IMG_SIZE)
-            
-            # Normalize
-            slice_img = (slice_img - np.min(slice_img)) / (np.max(slice_img) - np.min(slice_img) + 1e-8)
+            slice_img = (
+                data[mid_slice_idx, :, :] if si_axis == 0 else
+                data[:, mid_slice_idx, :] if si_axis == 1 else
+                data[:, :, mid_slice_idx]
+            )
+
+            # Resize, convert to numpy, then normalize
+            slice_img = tf.image.resize(slice_img[..., np.newaxis], IMG_SIZE).numpy()
+            vmin, vmax = slice_img.min(), slice_img.max()
+            slice_img = (slice_img - vmin) / (vmax - vmin + 1e-8)
             
             images.append(slice_img)
             labels.append(label) 
@@ -126,13 +110,11 @@ def create_model():
     # Load VGG16 base model, excluding the top dense layers
     base_model = VGG16(weights='imagenet', include_top=False, input_shape=(IMG_SIZE[0], IMG_SIZE[1], 3))
     
-    # Freeze the base model to avoid ruining pretrained features, but UNFREEZE block 5
+    # Freeze all layers except block5 (fine-tune top conv block only)
+    UNFREEZE = {'block5_conv1', 'block5_conv2', 'block5_conv3', 'block5_pool'}
     base_model.trainable = True
     for layer in base_model.layers:
-        if layer.name in ['block5_conv1', 'block5_conv2', 'block5_conv3', 'block5_pool']:
-            layer.trainable = True
-        else:
-            layer.trainable = False
+        layer.trainable = layer.name in UNFREEZE
 
     # Create new model on top
     inputs = tf.keras.Input(shape=(IMG_SIZE[0], IMG_SIZE[1], 1))
