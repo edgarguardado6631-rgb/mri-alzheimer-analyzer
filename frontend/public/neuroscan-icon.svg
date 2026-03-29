@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Background -->
+  <rect width="100" height="100" rx="18" fill="#161616"/>
+
+  <!-- MRI scanner ring -->
+  <circle cx="50" cy="50" r="40" fill="none" stroke="#0f62fe" stroke-width="2"/>
+  <!-- Ring tick marks -->
+  <line x1="50" y1="10" x2="50" y2="16" stroke="#0f62fe" stroke-width="2"/>
+  <line x1="50" y1="84" x2="50" y2="90" stroke="#0f62fe" stroke-width="2"/>
+  <line x1="10" y1="50" x2="16" y2="50" stroke="#0f62fe" stroke-width="2"/>
+  <line x1="84" y1="50" x2="90" y2="50" stroke="#0f62fe" stroke-width="2"/>
+
+  <!-- Brain silhouette (axial view — two hemispheres) -->
+  <!-- Left hemisphere -->
+  <path d="M50,22 C44,22 35,24 30,32 C25,40 25,52 30,60 C34,67 42,70 50,70"
+        fill="none" stroke="#0f62fe" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Right hemisphere -->
+  <path d="M50,22 C56,22 65,24 70,32 C75,40 75,52 70,60 C66,67 58,70 50,70"
+        fill="none" stroke="#0f62fe" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Interhemispheric fissure -->
+  <line x1="50" y1="22" x2="50" y2="70" stroke="#0f62fe" stroke-width="1.5" opacity="0.5"/>
+  <!-- Brain stem -->
+  <path d="M44,70 Q50,78 56,70" fill="none" stroke="#0f62fe" stroke-width="2.5" stroke-linecap="round"/>
+
+  <!-- Neural network nodes -->
+  <circle cx="36" cy="36" r="3.5" fill="#78a9ff"/>
+  <circle cx="50" cy="30" r="3.5" fill="#ffffff"/>
+  <circle cx="64" cy="36" r="3.5" fill="#78a9ff"/>
+  <circle cx="32" cy="52" r="3" fill="#0f62fe"/>
+  <circle cx="50" cy="50" r="4" fill="#0f62fe"/>
+  <circle cx="68" cy="52" r="3" fill="#0f62fe"/>
+  <circle cx="40" cy="63" r="3" fill="#78a9ff"/>
+  <circle cx="60" cy="63" r="3" fill="#78a9ff"/>
+
+  <!-- Neural connections -->
+  <line x1="36" y1="36" x2="50" y2="30" stroke="#78a9ff" stroke-width="1" opacity="0.7"/>
+  <line x1="50" y1="30" x2="64" y2="36" stroke="#78a9ff" stroke-width="1" opacity="0.7"/>
+  <line x1="36" y1="36" x2="32" y2="52" stroke="#78a9ff" stroke-width="1" opacity="0.7"/>
+  <line x1="36" y1="36" x2="50" y2="50" stroke="#78a9ff" stroke-width="1" opacity="0.7"/>
+  <line x1="64" y1="36" x2="68" y2="52" stroke="#78a9ff" stroke-width="1" opacity="0.7"/>
+  <line x1="64" y1="36" x2="50" y2="50" stroke="#78a9ff" stroke-width="1" opacity="0.7"/>
+  <line x1="32" y1="52" x2="40" y2="63" stroke="#78a9ff" stroke-width="1" opacity="0.7"/>
+  <line x1="50" y1="50" x2="40" y2="63" stroke="#78a9ff" stroke-width="1" opacity="0.7"/>
+  <line x1="50" y1="50" x2="60" y2="63" stroke="#78a9ff" stroke-width="1" opacity="0.7"/>
+  <line x1="68" y1="52" x2="60" y2="63" stroke="#78a9ff" stroke-width="1" opacity="0.7"/>
+
+  <!-- Scan line -->
+  <line x1="18" y1="50" x2="82" y2="50" stroke="#0f62fe" stroke-width="1" opacity="0.35" stroke-dasharray="5,3"/>
+</svg>

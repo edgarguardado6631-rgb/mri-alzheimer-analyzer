@@ -196,7 +196,7 @@ const Welcome = () => {
         {!hasMessages ? (
           <div className="chat-empty-state">
             <div className="chat-empty-icon">
-              <WatsonMachineLearning size={48} />
+              <img src="/neuroscan-icon.svg" alt="NeuroScan AI" width="80" height="80" />
             </div>
             <h2 className="cds--type-productive-heading-04">How can I help you today?</h2>
             <p className="cds--type-body-long-01 chat-empty-subtitle">

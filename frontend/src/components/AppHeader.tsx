@@ -28,8 +28,15 @@ const AppHeader = () => {
               onClick={onClickSideNavExpand}
               isActive={isSideNavExpanded}
             />
-            <HeaderName href="#" prefix="NeuroScan" onClick={(e) => { e.preventDefault(); navigate('/'); }}>
-              AI
+            <HeaderName href="#" prefix="" onClick={(e) => { e.preventDefault(); navigate('/'); }}>
+              <img
+                src="/neuroscan-icon.svg"
+                alt="NeuroScan AI"
+                width="24"
+                height="24"
+                style={{ marginRight: '0.5rem', verticalAlign: 'middle', borderRadius: '4px' }}
+              />
+              NeuroScan <strong style={{ fontWeight: 300 }}>AI</strong>
             </HeaderName>
 
             <HeaderGlobalBar>
