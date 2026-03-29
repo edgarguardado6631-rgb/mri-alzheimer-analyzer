@@ -10,7 +10,7 @@ import {
   SideNavItems,
   SideNavLink,
 } from '@carbon/react';
-import { Settings, UserAvatar } from '@carbon/icons-react';
+import { Settings, UserAvatar, Home, Analytics, SettingsAdjust } from '@carbon/icons-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 const AppHeader = () => {
@@ -21,22 +21,22 @@ const AppHeader = () => {
     <HeaderContainer
       render={({ isSideNavExpanded, onClickSideNavExpand }: { isSideNavExpanded: boolean; onClickSideNavExpand: () => void }) => (
         <>
-          <Header aria-label="Alzheimer's MRI Analysis">
+          <Header aria-label="NeuroScan AI — MRI Analysis">
             <SkipToContent />
             <HeaderMenuButton
-              aria-label="Open menu"
+              aria-label={isSideNavExpanded ? 'Close menu' : 'Open menu'}
               onClick={onClickSideNavExpand}
               isActive={isSideNavExpanded}
             />
-            <HeaderName href="#" prefix="AI" onClick={() => navigate('/')}>
-              MRI Analysis
+            <HeaderName href="#" prefix="NeuroScan" onClick={(e) => { e.preventDefault(); navigate('/'); }}>
+              AI
             </HeaderName>
 
             <HeaderGlobalBar>
               <HeaderGlobalAction aria-label="Settings" onClick={() => navigate('/settings')}>
                 <Settings size={20} />
               </HeaderGlobalAction>
-              <HeaderGlobalAction aria-label="User Avatar">
+              <HeaderGlobalAction aria-label="User profile">
                 <UserAvatar size={20} />
               </HeaderGlobalAction>
             </HeaderGlobalBar>
@@ -50,18 +50,21 @@ const AppHeader = () => {
           >
             <SideNavItems>
               <SideNavLink
+                renderIcon={Home}
                 isActive={location.pathname === '/'}
                 onClick={() => { navigate('/'); onClickSideNavExpand(); }}
               >
                 Welcome
               </SideNavLink>
               <SideNavLink
+                renderIcon={Analytics}
                 isActive={location.pathname === '/visualization'}
                 onClick={() => { navigate('/visualization'); onClickSideNavExpand(); }}
               >
                 Data Visualization
               </SideNavLink>
               <SideNavLink
+                renderIcon={SettingsAdjust}
                 isActive={location.pathname === '/settings'}
                 onClick={() => { navigate('/settings'); onClickSideNavExpand(); }}
               >

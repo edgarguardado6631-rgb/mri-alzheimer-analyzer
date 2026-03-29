@@ -1,5 +1,5 @@
 import { Routes, Route } from 'react-router-dom';
-import { Theme } from '@carbon/react';
+import { Theme, Content } from '@carbon/react';
 import AppHeader from './components/AppHeader';
 import Welcome from './pages/Welcome';
 import DataViz from './pages/DataViz';
@@ -11,15 +11,15 @@ const App = () => {
   const { isDark } = useTheme();
 
   return (
-    <Theme theme={isDark ? 'g100' : 'white'} style={{ minHeight: '100vh', backgroundColor: 'var(--cds-background)' }}>
+    <Theme theme={isDark ? 'g100' : 'white'} style={{ minHeight: '100vh' }}>
       <AppHeader />
-      <div style={{ marginTop: '3rem' }}>
+      <Content>
         <Routes>
           <Route path="/" element={<Welcome />} />
           <Route path="/visualization" element={<DataViz />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
-      </div>
+      </Content>
     </Theme>
   );
 };

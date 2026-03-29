@@ -1,10 +1,23 @@
 @use '@carbon/react';
 @use '@carbon/react/scss/components/ui-shell';
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
-  font-family: 'IBM Plex Sans', sans-serif;
+  font-family: 'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: var(--cds-layer-01, #f4f4f4);
+  background-color: var(--cds-background);
+  color: var(--cds-text-primary);
+}
+
+// Ensure the shell content area fills full height
+.cds--content {
+  padding: 2rem;
+  min-height: calc(100vh - 3rem);
 }
