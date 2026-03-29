@@ -152,6 +152,55 @@ def get_stats():
         "model_accuracy": 0.82 # VGG16 fine-tuned, 15 epochs, 80-sample test set
     }
 
+@app.get("/data/demographics")
+def get_demographics():
+    base_path = "data"
+    if not os.path.exists(base_path) and os.path.exists("../data"):
+        base_path = "../data"
+
+    csv_files = glob.glob(os.path.join(base_path, "*.csv"))
+    if not csv_files:
+        return {"groups": [], "sex": [], "age_bins": []}
+
+    import csv
+    from collections import defaultdict
+
+    group_counts: dict = defaultdict(int)
+    sex_counts: dict = defaultdict(int)
+    age_values: list = []
+    seen_subjects: set = set()
+
+    with open(csv_files[0], newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            subject = row.get("Subject", "").strip()
+            if subject in seen_subjects:
+                continue
+            seen_subjects.add(subject)
+            group = row.get("Group", "").strip()
+            sex = row.get("Sex", "").strip()
+            age_str = row.get("Age", "").strip()
+            if group:
+                group_counts[group] += 1
+            if sex:
+                sex_counts[sex] += 1
+            if age_str.isdigit():
+                age_values.append(int(age_str))
+
+    # Build age distribution in 10-year bins
+    age_bins: dict = defaultdict(int)
+    for age in age_values:
+        bin_start = (age // 10) * 10
+        label = f"{bin_start}–{bin_start + 9}"
+        age_bins[label] += 1
+
+    return {
+        "groups": [{"label": k, "count": v} for k, v in sorted(group_counts.items())],
+        "sex": [{"label": k, "count": v} for k, v in sorted(sex_counts.items())],
+        "age_bins": [{"label": k, "count": v} for k, v in sorted(age_bins.items())],
+    }
+
+
 @app.get("/data/patients")
 def get_patients():
     base_path = "data"

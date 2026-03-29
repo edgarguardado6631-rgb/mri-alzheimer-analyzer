@@ -30,6 +30,11 @@ const DataViz = () => {
     scans_processed: 0,
     model_accuracy: 0,
   });
+  const [demographics, setDemographics] = React.useState<{
+    groups: { label: string; count: number }[];
+    sex: { label: string; count: number }[];
+    age_bins: { label: string; count: number }[];
+  }>({ groups: [], sex: [], age_bins: [] });
 
   React.useEffect(() => {
     fetch(`${API_URL}/data/patients`)
@@ -41,6 +46,11 @@ const DataViz = () => {
       .then(res => res.json())
       .then(data => setDashboardStats(data))
       .catch(err => console.error('Failed to fetch stats:', err));
+
+    fetch(`${API_URL}/data/demographics`)
+      .then(res => res.json())
+      .then(data => setDemographics(data))
+      .catch(err => console.error('Failed to fetch demographics:', err));
   }, []);
 
   const fetchMetadata = async (patientId: string, scanFilename: string) => {
@@ -131,10 +141,69 @@ const DataViz = () => {
                   </Tile>
                 </Column>
                 <Column lg={16} md={8} sm={4} style={{ marginTop: '1rem' }}>
-                  <Tile style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <p className="cds--type-body-short-01" style={{ color: 'var(--cds-text-placeholder)' }}>
-                      Cohort Demographics Chart — coming soon
-                    </p>
+                  <Tile>
+                    <p className="cds--type-productive-heading-02" style={{ marginBottom: '1.5rem' }}>Cohort Demographics</p>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '2rem' }}>
+
+                      {/* Diagnosis group bars */}
+                      <div>
+                        <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Diagnosis Group</p>
+                        {(() => {
+                          const max = Math.max(...demographics.groups.map(g => g.count), 1);
+                          const colors: Record<string, string> = { CN: 'var(--cds-support-success)', MCI: 'var(--cds-support-warning)', AD: 'var(--cds-support-error)' };
+                          return demographics.groups.map(g => (
+                            <div key={g.label} style={{ marginBottom: '0.75rem' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                                <span className="cds--type-body-short-01">{g.label}</span>
+                                <span className="cds--type-body-short-01" style={{ color: 'var(--cds-text-secondary)' }}>{g.count}</span>
+                              </div>
+                              <div style={{ height: '8px', background: 'var(--cds-layer-02)', borderRadius: '2px' }}>
+                                <div style={{ height: '100%', width: `${(g.count / max) * 100}%`, background: colors[g.label] ?? 'var(--cds-link-primary)', borderRadius: '2px', transition: 'width 0.6s ease' }} />
+                              </div>
+                            </div>
+                          ));
+                        })()}
+                      </div>
+
+                      {/* Sex bars */}
+                      <div>
+                        <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Sex</p>
+                        {(() => {
+                          const max = Math.max(...demographics.sex.map(s => s.count), 1);
+                          return demographics.sex.map(s => (
+                            <div key={s.label} style={{ marginBottom: '0.75rem' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                                <span className="cds--type-body-short-01">{s.label === 'M' ? 'Male' : s.label === 'F' ? 'Female' : s.label}</span>
+                                <span className="cds--type-body-short-01" style={{ color: 'var(--cds-text-secondary)' }}>{s.count}</span>
+                              </div>
+                              <div style={{ height: '8px', background: 'var(--cds-layer-02)', borderRadius: '2px' }}>
+                                <div style={{ height: '100%', width: `${(s.count / max) * 100}%`, background: 'var(--cds-link-primary)', borderRadius: '2px', transition: 'width 0.6s ease' }} />
+                              </div>
+                            </div>
+                          ));
+                        })()}
+                      </div>
+
+                      {/* Age distribution bars */}
+                      <div>
+                        <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Age Distribution</p>
+                        {(() => {
+                          const max = Math.max(...demographics.age_bins.map(b => b.count), 1);
+                          return demographics.age_bins.map(b => (
+                            <div key={b.label} style={{ marginBottom: '0.75rem' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                                <span className="cds--type-body-short-01">{b.label}</span>
+                                <span className="cds--type-body-short-01" style={{ color: 'var(--cds-text-secondary)' }}>{b.count}</span>
+                              </div>
+                              <div style={{ height: '8px', background: 'var(--cds-layer-02)', borderRadius: '2px' }}>
+                                <div style={{ height: '100%', width: `${(b.count / max) * 100}%`, background: 'var(--cds-link-secondary)', borderRadius: '2px', transition: 'width 0.6s ease' }} />
+                              </div>
+                            </div>
+                          ));
+                        })()}
+                      </div>
+
+                    </div>
                   </Tile>
                 </Column>
               </Grid>
