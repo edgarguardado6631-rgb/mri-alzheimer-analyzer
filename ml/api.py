@@ -14,10 +14,15 @@ import matplotlib.pyplot as plt
 
 app = FastAPI()
 
-# Allow CORS for development
+# ALLOWED_ORIGINS: comma-separated list of allowed origins.
+# Defaults to "*" for local dev. Set to your CloudFront URL in production.
+# e.g. ALLOWED_ORIGINS=https://d1234abcd.cloudfront.net
+_raw_origins = os.environ.get("ALLOWED_ORIGINS", "*")
+allowed_origins = [o.strip() for o in _raw_origins.split(",")]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -42,6 +47,10 @@ async def load_model():
 @app.get("/")
 def read_root():
     return {"message": "Alzheimer's MRI Analysis API"}
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "model_loaded": model is not None}
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):

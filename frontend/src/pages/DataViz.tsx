@@ -1,6 +1,7 @@
 
 import React from 'react';
 import { Tile, Tabs, Tab, TabList, TabPanels, TabPanel, Slider, Dropdown } from '@carbon/react';
+import API_URL from '../config';
 
 const DataViz = () => {
     const [patients, setPatients] = React.useState<string[]>([]);
@@ -18,13 +19,13 @@ const DataViz = () => {
 
     React.useEffect(() => {
         // Fetch Patients List
-        fetch('http://localhost:8000/data/patients')
+        fetch(`${API_URL}/data/patients`)
             .then(res => res.json())
             .then(data => setPatients(data.patients))
             .catch(err => console.error("Failed to fetch patients:", err));
 
         // Fetch Dashboard Stats
-        fetch('http://localhost:8000/data/stats')
+        fetch(`${API_URL}/data/stats`)
             .then(res => res.json())
             .then(data => setDashboardStats(data))
             .catch(err => console.error("Failed to fetch stats:", err));
@@ -33,7 +34,7 @@ const DataViz = () => {
     const fetchMetadata = async (patientId: string, scanFilename: string) => {
         setLoading(true);
         try {
-            const res = await fetch(`http://localhost:8000/data/image/${patientId}/${scanFilename}/metadata`);
+            const res = await fetch(`${API_URL}/data/image/${patientId}/${scanFilename}/metadata`);
             const data = await res.json();
             setMaxSlices(data.max_slice);
             setCurrentSlice(Math.floor(data.max_slice / 2));
@@ -48,7 +49,7 @@ const DataViz = () => {
         setSelectedPatient(patientId);
         setLoading(true);
         try {
-            const scansRes = await fetch(`http://localhost:8000/data/image/${patientId}/scans`);
+            const scansRes = await fetch(`${API_URL}/data/image/${patientId}/scans`);
             const scansData = await scansRes.json();
             setPatientScans(scansData.scans || []);
 
@@ -162,7 +163,7 @@ const DataViz = () => {
                                                     <p style={{ color: 'white' }}>Loading metadata...</p>
                                                 ) : selectedScan ? (
                                                     <img
-                                                        src={`http://localhost:8000/data/image/${selectedPatient}/${selectedScan}/slice/${currentSlice}`}
+                                                        src={`${API_URL}/data/image/${selectedPatient}/${selectedScan}/slice/${currentSlice}`}
                                                         alt="MRI Slice"
                                                         style={{ maxHeight: '450px', maxWidth: '100%', objectFit: 'contain' }}
                                                     />

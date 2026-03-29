@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Tile, TextInput, Button, Loading } from '@carbon/react';
 import { Send, ImageSearch } from '@carbon/icons-react';
+import API_URL from '../config';
 import './Welcome.scss'; // We'll create this for specific chat styles
 
 const Welcome = () => {
@@ -24,7 +25,7 @@ const Welcome = () => {
                 setMessages(prev => [...prev, { role: 'bot', content: "To review a scan, please use the upload button (ghost icon)." }]);
             } else {
                 try {
-                    const healthCheck = await fetch('http://localhost:8000/');
+                    const healthCheck = await fetch(`${API_URL}/`);
                     const data = await healthCheck.json();
                     setMessages(prev => [...prev, { role: 'bot', content: `Backend says: "${data.message}". I am ready.` }]);
                 } catch (err) {
@@ -49,7 +50,7 @@ const Welcome = () => {
         formData.append('file', file);
 
         try {
-            const response = await fetch('http://localhost:8000/predict', {
+            const response = await fetch(`${API_URL}/predict`, {
                 method: 'POST',
                 body: formData
             });
