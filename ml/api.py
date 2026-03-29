@@ -152,6 +152,16 @@ def get_stats():
         "model_accuracy": 0.82 # VGG16 fine-tuned, 15 epochs, 80-sample test set
     }
 
+@app.get("/data/model-metrics")
+def get_model_metrics():
+    import json
+    metrics_path = os.path.join(BASE_DIR, "model_metrics.json")
+    if not os.path.exists(metrics_path):
+        raise HTTPException(status_code=404, detail="Model metrics not found. Run training first.")
+    with open(metrics_path, "r") as f:
+        return json.load(f)
+
+
 @app.get("/data/demographics")
 def get_demographics():
     base_path = "data"

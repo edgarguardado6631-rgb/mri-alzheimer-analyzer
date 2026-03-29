@@ -1,0 +1,13 @@
+{
+  "accuracy": 0.82,
+  "classes": [
+    { "label": "CN (Cognitively Normal)",       "precision": 0.86, "recall": 0.69, "f1": 0.77, "support": 26 },
+    { "label": "MCI (Mild Cognitive Impairment)","precision": 0.74, "recall": 0.91, "f1": 0.82, "support": 34 },
+    { "label": "AD (Alzheimer's Disease)",       "precision": 1.00, "recall": 0.85, "f1": 0.92, "support": 20 }
+  ],
+  "macro_avg":    { "precision": 0.87, "recall": 0.82, "f1": 0.83 },
+  "weighted_avg": { "precision": 0.84, "recall": 0.82, "f1": 0.83 },
+  "test_samples": 80,
+  "epochs": 15,
+  "model": "VGG16 fine-tuned (block5)"
+}
