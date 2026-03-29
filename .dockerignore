@@ -1,0 +1,4 @@
+data/
+frontend/node_modules
+ml/__pycache__
+.git

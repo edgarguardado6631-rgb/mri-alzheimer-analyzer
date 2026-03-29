@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.Python
+venv/
+env/
+.env
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# ML model files (large binaries — distribute separately)
+*.h5
+*.keras
+*.pkl
+*.joblib
+
+# Data
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Docker
+*.env.local
+
+# Claude Code
+.claude/
+
+# Generated artifacts / plots
+*.png
+*.jpg
+*.jpeg
+
+# Logs
+*.log

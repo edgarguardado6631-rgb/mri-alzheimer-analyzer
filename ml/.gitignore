@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.env
+
+# ML model files (large binaries — distribute separately)
+*.h5
+*.keras
+*.pkl
+*.joblib
+
+# Uploads/temp files
+uploads/
+*.nii
+*.nii.gz
+
+# Logs
+*.log
