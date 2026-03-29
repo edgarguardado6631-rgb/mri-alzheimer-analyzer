@@ -26,7 +26,7 @@ const DataViz = () => {
   const [maxSlices, setMaxSlices] = React.useState<number>(100);
   const [loading, setLoading] = React.useState<boolean>(false);
   const [dashboardStats, setDashboardStats] = React.useState({
-    total_patients: 179,
+    total_patients: 0,
     scans_processed: 0,
     model_accuracy: 0,
   });
@@ -127,7 +127,7 @@ const DataViz = () => {
                     <p className="cds--type-productive-heading-06" style={{ marginTop: '0.25rem' }}>
                       {(dashboardStats.model_accuracy * 100).toFixed(1)}%
                     </p>
-                    <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', marginTop: '0.25rem' }}>Based on validation set</p>
+                    <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', marginTop: '0.25rem' }}>Based on test set</p>
                   </Tile>
                 </Column>
                 <Column lg={16} md={8} sm={4} style={{ marginTop: '1rem' }}>
