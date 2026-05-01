@@ -21,27 +21,36 @@ BATCH_SIZE = 8
 EPOCHS = 15
 LABEL_MAP = {'CN': 0, 'MCI': 1, 'AD': 2}
 
-def load_data(data_dir, labels_file, max_samples=100):
+def load_data(data_dir, labels_file, max_samples=None):
+    """Load NIfTI MRI slices and their labels.
+
+    Parameters
+    ----------
+    max_samples : int or None
+        Maximum number of files to load.  None (default) loads everything found,
+        so the function automatically adapts if the dataset grows.
+    """
     images = []
-    labels = [] 
-    
+    labels = []
+
     # Load labels
     print(f"Loading labels from {labels_file}...")
     df = pd.read_csv(labels_file)
     # create dictionary mapping Image Data ID -> Group
     id_to_label = dict(zip(df['Image Data ID'], df['Group']))
-    
+
     # Searching for NIfTI files
     print(f"Scanning {data_dir} for .nii files...")
     files = glob.glob(os.path.join(data_dir, "**/*.nii"), recursive=True)
-    
+
     if not files:
         print("No .nii files found directly. Checking .nii.gz")
         files = glob.glob(os.path.join(data_dir, "**/*.nii.gz"), recursive=True)
-        
-    print(f"Found {len(files)} files. Loading up to {max_samples}...")
-    
-    for i, file_path in enumerate(files[:max_samples]):
+
+    cap_label = 'all' if max_samples is None else max_samples
+    print(f"Found {len(files)} files. Loading {cap_label}...")
+
+    for i, file_path in enumerate(files[:max_samples]):   # [:None] == [:] (all files)
         try:
             # Extract Image Data ID from filename
             # Filename format: ..._I12345.nii or ..._I12345.nii.gz
@@ -145,7 +154,7 @@ def create_model():
 if __name__ == "__main__":
     print("Starting pipeline...")
     # Increase max_samples to load more data for better accuracy
-    X, y, class_weights = load_data(DATA_DIR, LABELS_FILE, max_samples=400)
+    X, y, class_weights = load_data(DATA_DIR, LABELS_FILE)  # None = load all available files
     
     if len(X) == 0:
         print("No data loaded. Exiting.")

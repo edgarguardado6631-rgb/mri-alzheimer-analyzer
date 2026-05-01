@@ -1,6 +1,12 @@
+from dotenv import load_dotenv
+import pathlib
+load_dotenv(pathlib.Path(__file__).parent / '.env', override=True)
+
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Optional
 import tensorflow as tf
 import numpy as np
 import nibabel as nib
@@ -326,6 +332,86 @@ def get_image_slice(patient_id: str, scan_filename: str, slice_idx: int):
     except Exception as e:
         print(f"Error serving slice: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+CLINICAL_SYSTEM_PROMPT = """You are NeuroScan AI, a clinical decision-support assistant specialising in Alzheimer's disease MRI analysis.
+
+You help clinicians interpret CNN model predictions from structural MRI scans processed with the ADNI dataset pipeline. The model classifies scans into three categories:
+- CN (Cognitively Normal): No significant patterns associated with cognitive decline
+- MCI (Mild Cognitive Impairment): Early-stage changes; elevated risk for progression to AD
+- AD (Alzheimer's Disease): Patterns consistent with Alzheimer's disease
+
+When a scan result is provided to you, structure your response as follows:
+1. Briefly confirm the classification and confidence level in plain clinical language
+2. Explain what the result implies for this patient category
+3. Suggest relevant next clinical steps or monitoring considerations
+4. Note any caveats (confidence threshold, model limitations, need for longitudinal data)
+
+For general questions, answer concisely about MRI analysis, the detection pipeline, or Alzheimer's disease context.
+
+Always be evidence-based and remind the user that AI predictions are decision-support tools — final diagnosis must be made by a qualified clinician. Keep responses clear and appropriately concise."""
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ScanContext(BaseModel):
+    filename: str
+    prediction: str
+    confidence: float
+    class_index: int
+    all_probabilities: List[float]
+
+
+class ChatRequest(BaseModel):
+    messages: List[ChatMessage]
+    scan_context: Optional[ScanContext] = None
+
+
+@app.post("/ai/chat")
+async def ai_chat(request: ChatRequest):
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not set on the server.")
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+
+        system = CLINICAL_SYSTEM_PROMPT
+        if request.scan_context:
+            ctx = request.scan_context
+            label_map = {0: "CN — Cognitively Normal", 1: "MCI — Mild Cognitive Impairment", 2: "AD — Alzheimer's Disease"}
+            probs = ctx.all_probabilities
+            prob_lines = "\n".join(
+                f"  - {label_map.get(i, f'Class {i}')}: {p * 100:.1f}%"
+                for i, p in enumerate(probs)
+            ) if probs else "  Not available"
+            system += f"""
+
+Current scan under review:
+  File: {ctx.filename}
+  CNN prediction: {ctx.prediction}
+  Confidence: {ctx.confidence * 100:.1f}%
+  All class probabilities:
+{prob_lines}
+
+Interpret this result in your response."""
+
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            system=system,
+            messages=[{"role": m.role, "content": m.content} for m in request.messages],
+        )
+        return {"content": response.content[0].text}
+
+    except anthropic.APIError as e:
+        raise HTTPException(status_code=502, detail=f"Claude API error: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn

@@ -21,9 +21,15 @@ interface Message {
   timestamp: Date;
 }
 
-// Structured for LLM integration: swap handleAssistantReply with an LLM API call
-// that receives conversationHistory (array of {role, content}) and returns a string.
 type ConversationEntry = { role: 'user' | 'assistant'; content: string };
+
+interface ScanResult {
+  filename: string;
+  prediction: string;
+  confidence: number;
+  class_index: number;
+  all_probabilities: number[];
+}
 
 // ── Suggested prompts ──────────────────────────────────────────────────────
 const SUGGESTED_PROMPTS = [
@@ -59,9 +65,9 @@ const TypingIndicator = () => (
 );
 
 // ── Scan result card ───────────────────────────────────────────────────────
-const ScanResultCard = ({ prediction, confidence, analysis }: { prediction: string; confidence: number; analysis: string }) => (
+const ScanResultCard = ({ prediction, confidence }: { prediction: string; confidence: number }) => (
   <div className="scan-result-card">
-    <p className="scan-result-label">CNN Analysis Complete</p>
+    <p className="scan-result-label">CNN Classification</p>
     <p className="scan-result-prediction">{prediction}</p>
     <div className="scan-result-confidence">
       <div
@@ -70,10 +76,6 @@ const ScanResultCard = ({ prediction, confidence, analysis }: { prediction: stri
       />
       <span>{(confidence * 100).toFixed(1)}% confidence</span>
     </div>
-    <p className="scan-result-analysis">{analysis}</p>
-    <p className="scan-result-note">
-      LLM-powered in-depth analysis coming soon — the assistant will explain findings in natural language.
-    </p>
   </div>
 );
 
@@ -83,6 +85,7 @@ const Welcome = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [conversationHistory, setConversationHistory] = useState<ConversationEntry[]>([]);
+  const [scanContext, setScanContext] = useState<ScanResult | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -99,36 +102,43 @@ const Welcome = () => {
     ]);
   };
 
-  // ── Reply logic ── replace this function body with an LLM API call in the future
+  // ── Claude API call ────────────────────────────────────────────────────────
+  const callClaude = async (
+    history: ConversationEntry[],
+    context: ScanResult | null = null,
+  ): Promise<string> => {
+    const res = await fetch(`${API_URL}/ai/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: history,
+        scan_context: context
+          ? {
+              filename: context.filename,
+              prediction: context.prediction,
+              confidence: context.confidence,
+              class_index: context.class_index,
+              all_probabilities: context.all_probabilities,
+            }
+          : null,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail ?? 'Unknown error from /ai/chat');
+    }
+    const data = await res.json();
+    return data.content as string;
+  };
+
   const handleAssistantReply = async (userText: string, history: ConversationEntry[]) => {
     setIsTyping(true);
     try {
-      if (userText.toLowerCase().includes('scan') || userText.toLowerCase().includes('upload') || userText.toLowerCase().includes('analyze')) {
-        addMessage('assistant', 'To analyze a scan, click the attachment button below and upload a .nii or .nii.gz MRI file. The CNN model will classify it and provide a confidence score.');
-      } else if (userText.toLowerCase().includes('statistic') || userText.toLowerCase().includes('patient') || userText.toLowerCase().includes('accuracy')) {
-        const res = await fetch(`${API_URL}/data/stats`);
-        const data = await res.json();
-        addMessage('assistant', (
-          <div>
-            <p>Here is the current cohort summary:</p>
-            <ul>
-              <li><strong>Total patients:</strong> {data.total_patients}</li>
-              <li><strong>Scans processed:</strong> {data.scans_processed}</li>
-              <li><strong>Model accuracy:</strong> {(data.model_accuracy * 100).toFixed(1)}%</li>
-            </ul>
-          </div>
-        ));
-      } else if (userText.toLowerCase().includes('how') || userText.toLowerCase().includes('model') || userText.toLowerCase().includes('pipeline')) {
-        addMessage('assistant', 'The system uses a Convolutional Neural Network (CNN) trained on the ADNI dataset. When you upload a NIfTI MRI scan, the model extracts the mid-axial slice, resizes it to 128×128, normalizes pixel values, and runs inference to classify the scan as either "Alzheimer\'s Detected" or "Normal Cognition". Future versions will pair this with an LLM for detailed narrative explanations.');
-      } else if (userText.toLowerCase().includes('help') || userText.toLowerCase().includes('what can')) {
-        addMessage('assistant', 'I can help you with:\n• Analyzing MRI scans (.nii / .nii.gz) using our CNN model\n• Viewing patient cohort statistics\n• Navigating to the MRI viewer (Data Visualization tab)\n• Explaining the model and detection pipeline\n\nIn a future update, I will be connected to an LLM for richer clinical-language responses.');
-      } else {
-        const healthRes = await fetch(`${API_URL}/`);
-        const data = await healthRes.json();
-        addMessage('assistant', `I'm connected to the backend (${data.message}). I can analyze MRI scans, show patient statistics, or explain how the model works. What would you like to do?`);
-      }
-    } catch {
-      addMessage('assistant', "I couldn't reach the backend API. Please make sure the FastAPI server is running on port 8000.");
+      const reply = await callClaude(history, scanContext);
+      addMessage('assistant', reply);
+      setConversationHistory(prev => [...prev, { role: 'assistant', content: reply }]);
+    } catch (err) {
+      addMessage('assistant', `Error reaching the AI: ${err instanceof Error ? err.message : err}. Make sure the backend is running and ANTHROPIC_API_KEY is set.`);
     } finally {
       setIsTyping(false);
     }
@@ -146,7 +156,6 @@ const Welcome = () => {
       { role: 'user', content: userText },
     ];
     setConversationHistory(updatedHistory);
-
     await handleAssistantReply(userText, updatedHistory);
   };
 
@@ -154,6 +163,7 @@ const Welcome = () => {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    const userMsg = `Uploaded scan for analysis: ${file.name}`;
     addMessage('user', `Uploading scan: ${file.name}`);
     setIsTyping(true);
 
@@ -164,15 +174,40 @@ const Welcome = () => {
       const response = await fetch(`${API_URL}/predict`, { method: 'POST', body: formData });
       if (!response.ok) throw new Error('Prediction request failed');
       const result = await response.json();
+
+      // Show compact CNN result card
       addMessage('assistant', (
         <ScanResultCard
           prediction={result.prediction}
           confidence={result.confidence}
-          analysis={result.analysis}
         />
       ));
+
+      // Store scan context for the conversation
+      const ctx: ScanResult = {
+        filename: file.name,
+        prediction: result.prediction,
+        confidence: result.confidence,
+        class_index: result.class_index,
+        all_probabilities: result.all_probabilities ?? [],
+      };
+      setScanContext(ctx);
+
+      // Build history entry for this exchange and call Claude for enriched interpretation
+      const updatedHistory: ConversationEntry[] = [
+        ...conversationHistory,
+        { role: 'user', content: userMsg },
+        { role: 'assistant', content: `CNN result: ${result.prediction} (${(result.confidence * 100).toFixed(1)}% confidence)` },
+        { role: 'user', content: 'Please provide a clinical interpretation of this result.' },
+      ];
+      setConversationHistory(updatedHistory);
+
+      const reply = await callClaude(updatedHistory, ctx);
+      addMessage('assistant', reply);
+      setConversationHistory(prev => [...prev, { role: 'assistant', content: reply }]);
+
     } catch (error) {
-      addMessage('assistant', `Error analyzing the scan: ${error}. Please ensure the backend is running and the model is loaded.`);
+      addMessage('assistant', `Error analyzing the scan: ${error instanceof Error ? error.message : error}. Please ensure the backend is running and the model is loaded.`);
     } finally {
       setIsTyping(false);
       if (fileInputRef.current) fileInputRef.current.value = '';

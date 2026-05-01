@@ -35,6 +35,15 @@ const DataViz = () => {
     sex: { label: string; count: number }[];
     age_bins: { label: string; count: number }[];
   }>({ groups: [], sex: [], age_bins: [] });
+  const [modelMetrics, setModelMetrics] = React.useState<{
+    accuracy: number;
+    classes: { label: string; precision: number; recall: number; f1: number; support: number }[];
+    macro_avg: { precision: number; recall: number; f1: number };
+    weighted_avg: { precision: number; recall: number; f1: number };
+    test_samples: number;
+    epochs: number;
+    model: string;
+  } | null>(null);
 
   React.useEffect(() => {
     fetch(`${API_URL}/data/patients`)
@@ -51,6 +60,11 @@ const DataViz = () => {
       .then(res => res.json())
       .then(data => setDemographics(data))
       .catch(err => console.error('Failed to fetch demographics:', err));
+
+    fetch(`${API_URL}/data/model-metrics`)
+      .then(res => res.json())
+      .then(data => setModelMetrics(data))
+      .catch(err => console.error('Failed to fetch model metrics:', err));
   }, []);
 
   const fetchMetadata = async (patientId: string, scanFilename: string) => {
@@ -133,11 +147,15 @@ const DataViz = () => {
                 <Column lg={8} md={8} sm={4}>
                   <Tile>
                     <Tag type="green" size="sm">CNN Model</Tag>
-                    <p className="cds--type-helper-text-01" style={{ marginTop: '0.75rem', color: 'var(--cds-text-secondary)' }}>Model Accuracy</p>
+                    <p className="cds--type-helper-text-01" style={{ marginTop: '0.75rem', color: 'var(--cds-text-secondary)' }}>Overall Accuracy</p>
                     <p className="cds--type-productive-heading-06" style={{ marginTop: '0.25rem' }}>
                       {(dashboardStats.model_accuracy * 100).toFixed(1)}%
                     </p>
-                    <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', marginTop: '0.25rem' }}>Based on test set</p>
+                    {modelMetrics && (
+                      <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', marginTop: '0.25rem' }}>
+                        {modelMetrics.model} · {modelMetrics.epochs} epochs · {modelMetrics.test_samples} test samples
+                      </p>
+                    )}
                   </Tile>
                 </Column>
                 <Column lg={16} md={8} sm={4} style={{ marginTop: '1rem' }}>
@@ -206,6 +224,73 @@ const DataViz = () => {
                     </div>
                   </Tile>
                 </Column>
+
+                {modelMetrics && (
+                  <Column lg={16} md={8} sm={4} style={{ marginTop: '1rem' }}>
+                    <Tile>
+                      <p className="cds--type-productive-heading-02" style={{ marginBottom: '0.25rem' }}>Per-Class Performance</p>
+                      <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', marginBottom: '1.5rem' }}>
+                        Classification report — {modelMetrics.model} · {modelMetrics.epochs} epochs · {modelMetrics.test_samples} test samples
+                      </p>
+
+                      {/* Per-class expanded rows */}
+                      {(() => {
+                        const classColors: Record<string, string> = {
+                          CN: 'var(--cds-support-success)',
+                          MCI: 'var(--cds-support-warning)',
+                          AD: 'var(--cds-support-error)',
+                        };
+                        return modelMetrics.classes.map((cls) => {
+                          const color = classColors[cls.label] ?? 'var(--cds-link-primary)';
+                          return (
+                            <div key={cls.label} style={{ marginBottom: '1.5rem', paddingBottom: '1.5rem', borderBottom: '1px solid var(--cds-border-subtle-01)' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+                                <span className="cds--type-body-short-02" style={{ fontWeight: 600, color, minWidth: '3rem' }}>{cls.label}</span>
+                                <Tag type="gray" size="sm">{cls.support} samples</Tag>
+                              </div>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1.25rem' }}>
+                                {[
+                                  { label: 'Precision', value: cls.precision },
+                                  { label: 'Recall', value: cls.recall },
+                                  { label: 'F1 Score', value: cls.f1 },
+                                ].map(({ label, value }) => (
+                                  <div key={label}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.375rem' }}>
+                                      <span className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</span>
+                                      <span className="cds--type-body-short-01" style={{ fontWeight: 600 }}>{(value * 100).toFixed(1)}%</span>
+                                    </div>
+                                    <div style={{ height: '6px', background: 'var(--cds-layer-02)', borderRadius: '3px' }}>
+                                      <div style={{ height: '100%', width: `${value * 100}%`, background: color, borderRadius: '3px', transition: 'width 0.6s ease' }} />
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()}
+
+                      {/* Averages footer */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: '0.5rem', paddingTop: '0.5rem', paddingBottom: '0.5rem', borderBottom: '1px solid var(--cds-border-subtle-01)' }}>
+                        {['', 'Precision', 'Recall', 'F1', 'Support'].map(h => (
+                          <p key={h} className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{h}</p>
+                        ))}
+                      </div>
+                      {[
+                        { label: 'Macro avg', ...modelMetrics.macro_avg },
+                        { label: 'Weighted avg', ...modelMetrics.weighted_avg },
+                      ].map(row => (
+                        <div key={row.label} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: '0.5rem', padding: '0.5rem 0', borderBottom: '1px solid var(--cds-border-subtle-00)' }}>
+                          <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)' }}>{row.label}</p>
+                          <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)' }}>{row.precision.toFixed(2)}</p>
+                          <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)' }}>{row.recall.toFixed(2)}</p>
+                          <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)' }}>{row.f1.toFixed(2)}</p>
+                          <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)' }}>{modelMetrics.test_samples}</p>
+                        </div>
+                      ))}
+                    </Tile>
+                  </Column>
+                )}
               </Grid>
             </TabPanel>
 
