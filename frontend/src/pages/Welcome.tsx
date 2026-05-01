@@ -131,7 +131,7 @@ const Welcome = () => {
     return data.content as string;
   };
 
-  const handleAssistantReply = async (userText: string, history: ConversationEntry[]) => {
+  const handleAssistantReply = async (_userText: string, history: ConversationEntry[]) => {
     setIsTyping(true);
     try {
       const reply = await callClaude(history, scanContext);

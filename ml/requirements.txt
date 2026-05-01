@@ -1,0 +1,11 @@
+tensorflow
+nibabel
+numpy
+scikit-learn
+matplotlib
+fastapi
+uvicorn
+python-multipart
+anthropic
+python-dotenv
+pandas
