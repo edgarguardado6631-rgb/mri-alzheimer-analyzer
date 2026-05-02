@@ -38,12 +38,24 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "alzheimer_cnn_model.h5")
 model = None
 
+class _CompatDense(tf.keras.layers.Dense):
+    """Keras version compatibility shim — strips unknown 'quantization_config'
+    argument that newer Keras versions add to Dense layer configs."""
+    def __init__(self, *args, **kwargs):
+        kwargs.pop('quantization_config', None)
+        super().__init__(*args, **kwargs)
+
+
 @app.on_event("startup")
 async def load_model():
     global model
     if os.path.exists(MODEL_PATH):
         try:
-            model = tf.keras.models.load_model(MODEL_PATH)
+            model = tf.keras.models.load_model(
+                MODEL_PATH,
+                custom_objects={'Dense': _CompatDense},
+                compile=False,
+            )
             print("Model loaded successfully.")
         except Exception as e:
             print(f"Failed to load model: {e}")

@@ -44,3 +44,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# SSH keys — never commit private keys
+*.pem
+*.key
