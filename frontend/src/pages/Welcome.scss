@@ -266,8 +266,17 @@
 .chat-input-wrapper {
   flex-shrink: 0;
   padding: 1rem 1.5rem 1.25rem;
-  border-top: 1px solid var(--cds-border-subtle-01);
   background-color: var(--cds-background);
+
+  // Centered top divider that matches the input box width
+  &::before {
+    content: '';
+    display: block;
+    height: 1px;
+    background-color: var(--cds-border-subtle-01);
+    max-width: 52rem;
+    margin: 0 auto 1rem;
+  }
 }
 
 .chat-input-box {
