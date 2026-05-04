@@ -1,4 +1,4 @@
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { Theme, Content } from '@carbon/react';
 import AppHeader from './components/AppHeader';
 import Welcome from './pages/Welcome';
@@ -16,8 +16,11 @@ const App = () => {
       <Content>
         <Routes>
           <Route path="/" element={<Welcome />} />
+          <Route path="/welcome" element={<Welcome />} />
           <Route path="/visualization" element={<DataViz />} />
           <Route path="/settings" element={<Settings />} />
+          {/* Redirect any unknown path back to home */}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Content>
     </Theme>
