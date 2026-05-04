@@ -293,6 +293,27 @@ const Welcome = () => {
       {/* ── Input area ── */}
       <div className="chat-input-wrapper">
         <div className="chat-input-box">
+
+          {/* Left — file upload */}
+          <input
+            type="file"
+            ref={fileInputRef}
+            style={{ display: 'none' }}
+            onChange={handleFileUpload}
+            accept=".nii,.nii.gz"
+          />
+          <Button
+            kind="ghost"
+            renderIcon={Attachment}
+            iconDescription="Upload MRI scan (.nii / .nii.gz)"
+            hasIconOnly
+            size="md"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isTyping}
+            className="chat-input-attach"
+          />
+
+          {/* Centre — text */}
           <TextArea
             id="chat-input"
             labelText=""
@@ -303,32 +324,18 @@ const Welcome = () => {
             rows={1}
             disabled={isTyping}
           />
-          <div className="chat-input-actions">
-            <input
-              type="file"
-              ref={fileInputRef}
-              style={{ display: 'none' }}
-              onChange={handleFileUpload}
-              accept=".nii,.nii.gz"
-            />
-            <Button
-              kind="ghost"
-              renderIcon={Attachment}
-              iconDescription="Upload MRI scan (.nii / .nii.gz)"
-              hasIconOnly
-              size="md"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isTyping}
-            />
-            <Button
-              renderIcon={Send}
-              iconDescription="Send message"
-              hasIconOnly
-              size="md"
-              onClick={() => handleSend()}
-              disabled={!input.trim() || isTyping}
-            />
-          </div>
+
+          {/* Right — send */}
+          <Button
+            renderIcon={Send}
+            iconDescription="Send message"
+            hasIconOnly
+            size="md"
+            onClick={() => handleSend()}
+            disabled={!input.trim() || isTyping}
+            className="chat-input-send"
+          />
+
         </div>
         <p className="chat-disclaimer">
           NeuroScan AI may make mistakes. Always verify results with a qualified clinical professional.
