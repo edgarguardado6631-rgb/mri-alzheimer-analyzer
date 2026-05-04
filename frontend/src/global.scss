@@ -21,3 +21,79 @@ body {
   padding: 2rem;
   min-height: calc(100vh - 3rem);
 }
+
+// ── Responsive navigation ──────────────────────────────────────────────────
+
+// Always show the hamburger menu button regardless of breakpoint
+.cds--header__menu-toggle {
+  display: flex !important;
+}
+
+// Bottom navigation bar for mobile
+.bottom-nav {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3rem;
+  background-color: var(--cds-layer);
+  border-top: 1px solid var(--cds-border-subtle);
+  z-index: 8000;
+
+  .bottom-nav-items {
+    display: flex;
+    height: 100%;
+    align-items: stretch;
+  }
+
+  .bottom-nav-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.2rem;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--cds-text-secondary);
+    font-size: 0.625rem;
+    font-family: inherit;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    transition: color 0.15s, background-color 0.15s;
+
+    &:hover {
+      background-color: var(--cds-layer-hover);
+      color: var(--cds-text-primary);
+    }
+
+    &.active {
+      color: var(--cds-link-primary);
+      border-top: 2px solid var(--cds-link-primary);
+    }
+
+    svg {
+      flex-shrink: 0;
+    }
+  }
+}
+
+@media (max-width: 671px) {
+  // Show bottom nav on mobile
+  .bottom-nav {
+    display: block;
+  }
+
+  // Add padding so page content isn't hidden behind bottom nav
+  .cds--content {
+    padding-bottom: calc(3rem + 1rem);
+  }
+
+  // Shrink content padding on small screens
+  .cds--content {
+    padding: 1rem;
+    padding-bottom: calc(3rem + 1rem);
+  }
+}
