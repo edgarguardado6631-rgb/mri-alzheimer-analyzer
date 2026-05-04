@@ -114,12 +114,12 @@ const Welcome = () => {
         messages: history,
         scan_context: context
           ? {
-              filename: context.filename,
-              prediction: context.prediction,
-              confidence: context.confidence,
-              class_index: context.class_index,
-              all_probabilities: context.all_probabilities,
-            }
+            filename: context.filename,
+            prediction: context.prediction,
+            confidence: context.confidence,
+            class_index: context.class_index,
+            all_probabilities: context.all_probabilities,
+          }
           : null,
       }),
     });
@@ -231,7 +231,7 @@ const Welcome = () => {
         {!hasMessages ? (
           <div className="chat-empty-state">
             <div className="chat-empty-icon">
-              <img src="/neuroscan-icon.svg" alt="NeuroScan AI" width="80" height="80" />
+              <img src="/neuroscan-icon.png" alt="NeuroScan AI" width="80" height="80" />
             </div>
             <h2 className="cds--type-productive-heading-04">How can I help you today?</h2>
             <p className="cds--type-body-long-01 chat-empty-subtitle">

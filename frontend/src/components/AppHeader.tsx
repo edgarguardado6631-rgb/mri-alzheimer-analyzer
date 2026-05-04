@@ -30,7 +30,7 @@ const AppHeader = () => {
             />
             <HeaderName href="#" prefix="" onClick={(e) => { e.preventDefault(); navigate('/'); }}>
               <img
-                src="/neuroscan-icon.svg"
+                  src="/neuroscan-icon.png"
                 alt="NeuroScan AI"
                 width="24"
                 height="24"
