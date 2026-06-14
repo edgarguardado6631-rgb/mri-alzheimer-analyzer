@@ -17,6 +17,9 @@ import glob
 import io
 import logging
 import tempfile
+import uuid
+import time
+import threading
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -73,6 +76,56 @@ MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 PATIENT_ID_RE = re.compile(r'^[A-Za-z0-9_\-]+$')
 
 model = None
+
+# ── Viewer session store ───────────────────────────────────────────────────
+# Temporary NIfTI files uploaded for the local-file viewer; keyed by UUID.
+VIEWER_TEMP_DIR = tempfile.mkdtemp(prefix="neuroscan_viewer_")
+_viewer_sessions: dict = {}          # session_id → {"path": str, "created_at": float}
+_SESSION_TTL_SECONDS = 3600         # purge files older than 1 hour
+
+
+def _cleanup_viewer_sessions() -> None:
+    """Background daemon: remove temp files for expired viewer sessions."""
+    while True:
+        time.sleep(300)             # check every 5 minutes
+        now = time.time()
+        expired = [
+            sid for sid, info in list(_viewer_sessions.items())
+            if now - info["created_at"] > _SESSION_TTL_SECONDS
+        ]
+        for sid in expired:
+            info = _viewer_sessions.pop(sid, {})
+            path = info.get("path", "")
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+        if expired:
+            logger.info(f"Viewer session cleanup: removed {len(expired)} expired session(s).")
+
+
+threading.Thread(target=_cleanup_viewer_sessions, daemon=True).start()
+
+
+# ── MRI display helper ─────────────────────────────────────────────────────
+def _mri_window(slice_arr: np.ndarray) -> tuple:
+    """
+    Return (vmin, vmax) for matplotlib using percentile-based windowing.
+
+    Plain min/max normalization collapses all brain tissue to near-white
+    whenever a few extreme-intensity voxels (RF hot-spots, vessels) exist.
+    Clipping to the 1st–99th percentile of *non-zero* voxels gives the
+    same result a radiologist would see with standard window/level.
+    """
+    nonzero = slice_arr[slice_arr > 0]
+    if nonzero.size == 0:
+        return float(slice_arr.min()), float(slice_arr.max()) + 1e-8
+    vmin = float(np.percentile(nonzero, 1))
+    vmax = float(np.percentile(nonzero, 99))
+    if vmax <= vmin:
+        vmax = vmin + 1.0
+    return vmin, vmax
 
 
 # ── Input validators ───────────────────────────────────────────────────────
@@ -416,10 +469,11 @@ def get_image_slice(patient_id: str, scan_filename: str, slice_idx: int):
         # Clamp to valid range
         slice_idx = min(slice_idx, data.shape[2] - 1)
         slice_img = np.rot90(data[:, :, slice_idx])
+        vmin, vmax = _mri_window(slice_img)
 
         fig = plt.figure(figsize=(4, 4))
         try:
-            plt.imshow(slice_img, cmap='gray')
+            plt.imshow(slice_img, cmap='gray', vmin=vmin, vmax=vmax)
             plt.axis('off')
             buf = io.BytesIO()
             plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
@@ -432,6 +486,101 @@ def get_image_slice(patient_id: str, scan_filename: str, slice_idx: int):
         raise
     except Exception as e:
         logger.error(f"Slice render error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not render scan slice.")
+
+
+# ── Local viewer: session upload & slice ──────────────────────────────────
+
+@app.post("/data/viewer/upload")
+@limiter.limit("30/minute")
+async def viewer_upload(request: Request, file: UploadFile = File(...)):
+    """Accept a client-side NIfTI file, validate it, store in a temp session, and return slice info."""
+    if not (file.filename.endswith(".nii") or file.filename.endswith(".nii.gz")):
+        raise HTTPException(status_code=400, detail="Only .nii or .nii.gz files are supported.")
+
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum allowed size is {MAX_UPLOAD_MB} MB.",
+        )
+
+    session_id = str(uuid.uuid4())
+    suffix = ".nii.gz" if file.filename.endswith(".nii.gz") else ".nii"
+    dest_path = os.path.join(VIEWER_TEMP_DIR, f"{session_id}{suffix}")
+
+    try:
+        with open(dest_path, "wb") as dest:
+            dest.write(content)
+
+        # Validate NIfTI and extract shape
+        try:
+            img = nib.load(dest_path)
+            if len(img.shape) < 3:
+                raise ValueError("Volume must have at least 3 dimensions.")
+            max_slice = int(img.shape[2]) - 1
+        except Exception:
+            os.remove(dest_path)
+            raise HTTPException(status_code=400, detail="Invalid or unsupported NIfTI file.")
+
+        _viewer_sessions[session_id] = {
+            "path": dest_path,
+            "created_at": time.time(),
+        }
+        return {"session_id": session_id, "max_slice": max_slice, "filename": file.filename}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        if os.path.exists(dest_path):
+            os.remove(dest_path)
+        logger.error(f"Viewer upload error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Upload failed. Please try again.")
+
+
+@app.get("/data/viewer/{session_id}/slice/{slice_idx}")
+def get_viewer_slice(session_id: str, slice_idx: int):
+    """Render a PNG slice from a previously uploaded viewer session file."""
+    # Validate session_id is a well-formed UUID to prevent path tricks
+    try:
+        uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session ID format.")
+
+    if slice_idx < 0:
+        raise HTTPException(status_code=400, detail="Slice index must be non-negative.")
+
+    session = _viewer_sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or has expired.")
+
+    file_path = session["path"]
+    if not os.path.exists(file_path):
+        _viewer_sessions.pop(session_id, None)
+        raise HTTPException(status_code=404, detail="Session file has been cleaned up.")
+
+    try:
+        img  = nib.load(file_path)
+        data = img.get_fdata()
+        slice_idx = min(slice_idx, data.shape[2] - 1)
+        slice_img = np.rot90(data[:, :, slice_idx])
+        vmin, vmax = _mri_window(slice_img)
+
+        fig = plt.figure(figsize=(4, 4))
+        try:
+            plt.imshow(slice_img, cmap="gray", vmin=vmin, vmax=vmax)
+            plt.axis("off")
+            buf = io.BytesIO()
+            plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0)
+            buf.seek(0)
+            return Response(content=buf.getvalue(), media_type="image/png")
+        finally:
+            plt.close(fig)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Viewer slice error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not render scan slice.")
 
 

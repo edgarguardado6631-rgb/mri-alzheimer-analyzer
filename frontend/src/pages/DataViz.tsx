@@ -14,10 +14,20 @@ import {
   Tag,
   InlineLoading,
   Layer,
+  ContentSwitcher,
+  Switch,
+  Button,
 } from '@carbon/react';
+import { FolderOpen, Upload } from '@carbon/icons-react';
 import API_URL from '../config';
 
+// ── Types ──────────────────────────────────────────────────────────────────
+type SourceMode = 'server' | 'directory' | 'file';
+
+// ── Component ──────────────────────────────────────────────────────────────
 const DataViz = () => {
+
+  // ── Dashboard / server-viewer state ──────────────────────────────────────
   const [patients, setPatients] = React.useState<string[]>([]);
   const [selectedPatient, setSelectedPatient] = React.useState<string | null>(null);
   const [patientScans, setPatientScans] = React.useState<string[]>([]);
@@ -45,6 +55,25 @@ const DataViz = () => {
     model: string;
   } | null>(null);
 
+  // ── Source mode state ─────────────────────────────────────────────────────
+  const [sourceMode, setSourceMode] = React.useState<SourceMode>('server');
+  // Directory mode: map of patient-folder-name → File[]
+  const [localFileMap, setLocalFileMap] = React.useState<Map<string, File[]>>(new Map());
+  const [localDirName, setLocalDirName] = React.useState<string>('');
+  // Session-based viewer (used by Directory & File modes)
+  const [viewerSessionId, setViewerSessionId] = React.useState<string | null>(null);
+  const [uploadingViewer, setUploadingViewer] = React.useState(false);
+
+  const dirInputRef = React.useRef<HTMLInputElement>(null);
+  const singleFileInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Attach webkitdirectory (not in TS built-in typings) after mount
+  React.useEffect(() => {
+    dirInputRef.current?.setAttribute('webkitdirectory', '');
+    dirInputRef.current?.setAttribute('multiple', '');
+  }, []);
+
+  // ── Initial data fetch ────────────────────────────────────────────────────
   React.useEffect(() => {
     fetch(`${API_URL}/data/patients`)
       .then(res => res.json())
@@ -67,6 +96,7 @@ const DataViz = () => {
       .catch(err => console.error('Failed to fetch model metrics:', err));
   }, []);
 
+  // ── Server mode handlers ──────────────────────────────────────────────────
   const fetchMetadata = async (patientId: string, scanFilename: string) => {
     setLoading(true);
     try {
@@ -102,12 +132,159 @@ const DataViz = () => {
     }
   };
 
-  const handleScanSelect = (item: { selectedItem: string }) => {
+  const handleServerScanSelect = (item: { selectedItem: string }) => {
     const scan = item.selectedItem;
     setSelectedScan(scan);
     if (selectedPatient) fetchMetadata(selectedPatient, scan);
   };
 
+  // ── Source mode switch ────────────────────────────────────────────────────
+  const SOURCE_MODES: SourceMode[] = ['server', 'directory', 'file'];
+
+  const handleModeChange = (mode: SourceMode) => {
+    setSourceMode(mode);
+    setSelectedPatient(null);
+    setSelectedScan(null);
+    setViewerSessionId(null);
+    setCurrentSlice(0);
+    setMaxSlices(100);
+    setPatientScans([]);
+    setLocalFileMap(new Map());
+    setLocalDirName('');
+  };
+
+  // ── Viewer session upload (Directory & File modes) ────────────────────────
+  const uploadToViewer = async (file: File) => {
+    setUploadingViewer(true);
+    setViewerSessionId(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(`${API_URL}/data/viewer/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) throw new Error('Upload failed');
+      const data = await res.json();
+      setViewerSessionId(data.session_id);
+      setMaxSlices(data.max_slice);
+      setCurrentSlice(Math.floor(data.max_slice / 2));
+    } catch (err) {
+      console.error('Viewer upload error:', err);
+    } finally {
+      setUploadingViewer(false);
+    }
+  };
+
+  // ── Directory mode handlers ───────────────────────────────────────────────
+  const handleDirectoryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const allFiles = Array.from(e.target.files || []);
+    const niiFiles = allFiles.filter(
+      f => f.name.endsWith('.nii') || f.name.endsWith('.nii.gz'),
+    );
+
+    if (niiFiles.length === 0) {
+      setLocalFileMap(new Map());
+      setLocalDirName('');
+      return;
+    }
+
+    // Group by immediate parent folder name (= patient)
+    const map = new Map<string, File[]>();
+    for (const f of niiFiles) {
+      // webkitRelativePath: "selectedDir/patient/scan.nii.gz"
+      const rel: string = (f as any).webkitRelativePath || f.name;
+      const parts = rel.split('/');
+      const patient = parts.length >= 2 ? parts[parts.length - 2] : 'Root';
+      if (!map.has(patient)) map.set(patient, []);
+      map.get(patient)!.push(f);
+    }
+
+    const dirName = ((niiFiles[0] as any).webkitRelativePath || '').split('/')[0] || '';
+    setLocalDirName(dirName);
+    setLocalFileMap(map);
+    setSelectedPatient(null);
+    setSelectedScan(null);
+    setViewerSessionId(null);
+
+    // Allow re-selecting the same folder
+    if (dirInputRef.current) dirInputRef.current.value = '';
+  };
+
+  const handleLocalPatientSelect = ({ selectedItem }: { selectedItem: string | null }) => {
+    if (!selectedItem) return;
+    setSelectedPatient(selectedItem);
+    const files = localFileMap.get(selectedItem) || [];
+    setPatientScans(files.map(f => f.name));
+    setSelectedScan(null);
+    setViewerSessionId(null);
+
+    // Auto-select & upload when this patient has exactly one scan
+    if (files.length === 1) {
+      setSelectedScan(files[0].name);
+      uploadToViewer(files[0]);
+    }
+  };
+
+  const handleLocalScanSelect = ({ selectedItem }: { selectedItem: string | null }) => {
+    if (!selectedItem || !selectedPatient) return;
+    setSelectedScan(selectedItem);
+    const files = localFileMap.get(selectedPatient) || [];
+    const file = files.find(f => f.name === selectedItem);
+    if (file) uploadToViewer(file);
+  };
+
+  // ── File mode handler ─────────────────────────────────────────────────────
+  const handleSingleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setSelectedScan(file.name);
+    await uploadToViewer(file);
+    if (singleFileInputRef.current) singleFileInputRef.current.value = '';
+  };
+
+  // ── Derived viewer state ──────────────────────────────────────────────────
+  const isViewerLoading = sourceMode === 'server' ? loading : uploadingViewer;
+  const isViewerReady =
+    sourceMode === 'server' ? !!(selectedPatient && selectedScan) : !!viewerSessionId;
+
+  const sliceImageSrc =
+    sourceMode === 'server'
+      ? `${API_URL}/data/image/${selectedPatient}/${selectedScan}/slice/${currentSlice}`
+      : viewerSessionId
+        ? `${API_URL}/data/viewer/${viewerSessionId}/slice/${currentSlice}`
+        : '';
+
+  const localPatientList = Array.from(localFileMap.keys()).sort();
+  const localTotalScans = Array.from(localFileMap.values()).reduce(
+    (sum, arr) => sum + arr.length,
+    0,
+  );
+
+  // Empty-state copy
+  const emptyTitle =
+    sourceMode === 'server'
+      ? 'No patient selected'
+      : sourceMode === 'directory'
+        ? localFileMap.size === 0
+          ? 'No folder loaded'
+          : !selectedPatient
+            ? 'No patient selected'
+            : 'No scan selected'
+        : 'No file selected';
+
+  const emptySubtitle =
+    sourceMode === 'server'
+      ? 'Search and select a patient above to view their MRI scans'
+      : sourceMode === 'directory'
+        ? localFileMap.size === 0
+          ? 'Click "Browse Folder" to select a local directory of NIfTI scans'
+          : !selectedPatient
+            ? 'Select a patient from the dropdown above'
+            : 'Select a scan from the dropdown above'
+        : 'Click "Browse File" to open a local .nii or .nii.gz scan';
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <Grid>
       <Column lg={16} md={8} sm={4}>
@@ -127,7 +304,7 @@ const DataViz = () => {
           </TabList>
           <TabPanels>
 
-            {/* Dashboard Tab */}
+            {/* ── Dashboard Tab ── */}
             <TabPanel>
               <Grid narrow style={{ marginTop: '1.5rem' }}>
                 <Column lg={4} md={4} sm={4}>
@@ -233,7 +410,6 @@ const DataViz = () => {
                         Classification report — {modelMetrics.model} · {modelMetrics.epochs} epochs · {modelMetrics.test_samples} test samples
                       </p>
 
-                      {/* Per-class expanded rows */}
                       {(() => {
                         const classColors: Record<string, string> = {
                           CN: 'var(--cds-support-success)',
@@ -270,7 +446,6 @@ const DataViz = () => {
                         });
                       })()}
 
-                      {/* Averages footer */}
                       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: '0.5rem', paddingTop: '0.5rem', paddingBottom: '0.5rem', borderBottom: '1px solid var(--cds-border-subtle-01)' }}>
                         {['', 'Precision', 'Recall', 'F1', 'Support'].map(h => (
                           <p key={h} className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{h}</p>
@@ -294,52 +469,189 @@ const DataViz = () => {
               </Grid>
             </TabPanel>
 
-            {/* MRI Viewer Tab */}
+            {/* ── MRI Viewer Tab ── */}
             <TabPanel>
               <Grid narrow style={{ marginTop: '1.5rem' }}>
 
-                {/* Controls row */}
-                <Column lg={6} md={4} sm={4}>
-                  <Layer>
-                    <ComboBox
-                      id="patient-search"
-                      titleText="Patient"
-                      placeholder="Search by patient ID…"
-                      helperText={patients.length > 0 ? `${patients.length} patients available` : 'Loading…'}
-                      items={patients}
-                      itemToString={(item) => item ?? ''}
-                      selectedItem={selectedPatient}
-                      onChange={({ selectedItem }) => {
-                        if (selectedItem) handlePatientSelect(selectedItem);
-                      }}
-                    />
-                  </Layer>
+                {/* Source switcher */}
+                <Column lg={16} md={8} sm={4} style={{ marginBottom: '1.25rem' }}>
+                  <p
+                    className="cds--label"
+                    style={{ marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--cds-text-secondary)' }}
+                  >
+                    Source
+                  </p>
+                  <ContentSwitcher
+                    selectedIndex={SOURCE_MODES.indexOf(sourceMode)}
+                    onChange={({ index }) =>
+                      handleModeChange(SOURCE_MODES[index as number])
+                    }
+                    size="md"
+                  >
+                    <Switch name="server" text="Server" />
+                    <Switch name="directory" text="Directory" />
+                    <Switch name="file" text="File" />
+                  </ContentSwitcher>
                 </Column>
 
-                <Column lg={6} md={4} sm={4}>
-                  <Layer>
-                    <Dropdown
-                      id="scan-dropdown"
-                      titleText="MRI Scan"
-                      label={selectedPatient ? 'Choose a scan' : 'Select a patient first'}
-                      items={patientScans}
-                      selectedItem={selectedScan}
-                      onChange={handleScanSelect}
-                      disabled={!selectedPatient || patientScans.length === 0}
-                    />
-                  </Layer>
-                </Column>
+                {/* ── Server mode controls ── */}
+                {sourceMode === 'server' && (
+                  <>
+                    <Column lg={6} md={4} sm={4}>
+                      <Layer>
+                        <ComboBox
+                          id="patient-search"
+                          titleText="Patient"
+                          placeholder="Search by patient ID…"
+                          helperText={
+                            patients.length > 0
+                              ? `${patients.length} patients available`
+                              : 'Loading…'
+                          }
+                          items={patients}
+                          itemToString={(item) => item ?? ''}
+                          selectedItem={selectedPatient}
+                          onChange={({ selectedItem }) => {
+                            if (selectedItem) handlePatientSelect(selectedItem);
+                          }}
+                        />
+                      </Layer>
+                    </Column>
 
-                {selectedPatient && selectedScan && (
-                  <Column lg={4} md={8} sm={4} style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: '0.25rem' }}>
-                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                      <Tag type="blue" size="sm">{selectedPatient}</Tag>
-                      <Tag type="gray" size="sm">Slice {currentSlice}/{maxSlices}</Tag>
-                    </div>
-                  </Column>
+                    <Column lg={6} md={4} sm={4}>
+                      <Layer>
+                        <Dropdown
+                          id="scan-dropdown"
+                          titleText="MRI Scan"
+                          label={selectedPatient ? 'Choose a scan' : 'Select a patient first'}
+                          items={patientScans}
+                          selectedItem={selectedScan}
+                          onChange={handleServerScanSelect}
+                          disabled={!selectedPatient || patientScans.length === 0}
+                        />
+                      </Layer>
+                    </Column>
+
+                    {selectedPatient && selectedScan && (
+                      <Column lg={4} md={8} sm={4} style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: '0.25rem' }}>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <Tag type="blue" size="sm">{selectedPatient}</Tag>
+                          <Tag type="gray" size="sm">Slice {currentSlice}/{maxSlices}</Tag>
+                        </div>
+                      </Column>
+                    )}
+                  </>
                 )}
 
-                {/* Viewer */}
+                {/* ── Directory mode controls ── */}
+                {sourceMode === 'directory' && (
+                  <>
+                    {/* Hidden directory input — webkitdirectory set via useEffect */}
+                    <input
+                      ref={dirInputRef}
+                      type="file"
+                      style={{ display: 'none' }}
+                      onChange={handleDirectoryChange}
+                      accept=".nii,.nii.gz"
+                    />
+
+                    <Column lg={16} md={8} sm={4} style={{ marginBottom: '0.75rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                        <Button
+                          kind="secondary"
+                          renderIcon={FolderOpen}
+                          onClick={() => dirInputRef.current?.click()}
+                          size="md"
+                        >
+                          Browse Folder
+                        </Button>
+
+                        {localDirName && (
+                          <Tag type="teal" size="md">
+                            {localDirName} — {localPatientList.length} patient{localPatientList.length !== 1 ? 's' : ''}, {localTotalScans} scan{localTotalScans !== 1 ? 's' : ''}
+                          </Tag>
+                        )}
+                      </div>
+                    </Column>
+
+                    {localFileMap.size > 0 && (
+                      <>
+                        <Column lg={6} md={4} sm={4}>
+                          <Layer>
+                            <Dropdown
+                              id="local-patient-dropdown"
+                              titleText="Patient"
+                              label="Choose a patient folder"
+                              items={localPatientList}
+                              selectedItem={selectedPatient}
+                              onChange={handleLocalPatientSelect}
+                            />
+                          </Layer>
+                        </Column>
+
+                        <Column lg={6} md={4} sm={4}>
+                          <Layer>
+                            <Dropdown
+                              id="local-scan-dropdown"
+                              titleText="MRI Scan"
+                              label={selectedPatient ? 'Choose a scan' : 'Select a patient first'}
+                              items={patientScans}
+                              selectedItem={selectedScan}
+                              onChange={handleLocalScanSelect}
+                              disabled={!selectedPatient || patientScans.length === 0}
+                            />
+                          </Layer>
+                        </Column>
+
+                        {isViewerReady && (
+                          <Column lg={4} md={8} sm={4} style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: '0.25rem' }}>
+                            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                              {selectedPatient && <Tag type="blue" size="sm">{selectedPatient}</Tag>}
+                              <Tag type="gray" size="sm">Slice {currentSlice}/{maxSlices}</Tag>
+                            </div>
+                          </Column>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+
+                {/* ── File mode controls ── */}
+                {sourceMode === 'file' && (
+                  <>
+                    {/* Hidden single-file input */}
+                    <input
+                      ref={singleFileInputRef}
+                      type="file"
+                      style={{ display: 'none' }}
+                      onChange={handleSingleFileChange}
+                      accept=".nii,.nii.gz"
+                    />
+
+                    <Column lg={16} md={8} sm={4} style={{ marginBottom: '0.75rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                        <Button
+                          kind="secondary"
+                          renderIcon={Upload}
+                          onClick={() => singleFileInputRef.current?.click()}
+                          size="md"
+                          disabled={uploadingViewer}
+                        >
+                          Browse File
+                        </Button>
+
+                        {selectedScan && isViewerReady && (
+                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                            <Tag type="blue" size="sm">{selectedScan}</Tag>
+                            <Tag type="gray" size="sm">Slice {currentSlice}/{maxSlices}</Tag>
+                          </div>
+                        )}
+                      </div>
+                    </Column>
+                  </>
+                )}
+
+                {/* ── Viewer tile (shared across all modes) ── */}
                 <Column lg={16} md={8} sm={4} style={{ marginTop: '1rem' }}>
                   <Tile
                     style={{
@@ -352,45 +664,60 @@ const DataViz = () => {
                       padding: '1.5rem',
                     }}
                   >
-                    {!selectedPatient ? (
+                    {isViewerLoading ? (
+                      <InlineLoading
+                        description={
+                          sourceMode === 'server'
+                            ? 'Loading scan…'
+                            : 'Uploading and processing scan…'
+                        }
+                        status="active"
+                        style={{ color: 'var(--cds-text-inverse)' }}
+                      />
+                    ) : isViewerReady ? (
+                      <>
+                        <div
+                          style={{
+                            flex: 1,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            width: '100%',
+                            minHeight: 0,
+                          }}
+                        >
+                          <img
+                            src={sliceImageSrc}
+                            alt="MRI Slice"
+                            style={{ maxHeight: '440px', maxWidth: '100%', objectFit: 'contain' }}
+                          />
+                        </div>
+                        <div style={{ width: '100%', maxWidth: '40rem', paddingTop: '1.5rem' }}>
+                          <Slider
+                            labelText="Slice index"
+                            value={currentSlice}
+                            min={0}
+                            max={maxSlices}
+                            step={1}
+                            onChange={({ value }: { value: number }) => setCurrentSlice(value)}
+                          />
+                        </div>
+                      </>
+                    ) : (
                       <div style={{ textAlign: 'center' }}>
-                        <p className="cds--type-productive-heading-02" style={{ color: 'var(--cds-text-inverse)', marginBottom: '0.5rem' }}>
-                          No patient selected
+                        <p
+                          className="cds--type-productive-heading-02"
+                          style={{ color: 'var(--cds-text-inverse)', marginBottom: '0.5rem' }}
+                        >
+                          {emptyTitle}
                         </p>
-                        <p className="cds--type-body-short-01" style={{ color: 'var(--cds-text-placeholder)' }}>
-                          Search and select a patient above to view their MRI scans
+                        <p
+                          className="cds--type-body-short-01"
+                          style={{ color: 'var(--cds-text-placeholder)' }}
+                        >
+                          {emptySubtitle}
                         </p>
                       </div>
-                    ) : (
-                      <>
-                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', minHeight: 0 }}>
-                          {loading ? (
-                            <InlineLoading description="Loading scan…" status="active" style={{ color: 'var(--cds-text-inverse)' }} />
-                          ) : selectedScan ? (
-                            <img
-                              src={`${API_URL}/data/image/${selectedPatient}/${selectedScan}/slice/${currentSlice}`}
-                              alt="MRI Slice"
-                              style={{ maxHeight: '440px', maxWidth: '100%', objectFit: 'contain' }}
-                            />
-                          ) : (
-                            <p className="cds--type-body-short-01" style={{ color: 'var(--cds-text-placeholder)' }}>
-                              No scans available for this patient
-                            </p>
-                          )}
-                        </div>
-                        {selectedScan && (
-                          <div style={{ width: '100%', maxWidth: '40rem', paddingTop: '1.5rem' }}>
-                            <Slider
-                              labelText={`Slice index`}
-                              value={currentSlice}
-                              min={0}
-                              max={maxSlices}
-                              step={1}
-                              onChange={({ value }: { value: number }) => setCurrentSlice(value)}
-                            />
-                          </div>
-                        )}
-                      </>
                     )}
                   </Tile>
                 </Column>
