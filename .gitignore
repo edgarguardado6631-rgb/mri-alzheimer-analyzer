@@ -19,8 +19,13 @@ env/
 *.pkl
 *.joblib
 
-# Data
+# Data (ADNI data may not be redistributed; keep it out of the repo)
 data/
+
+# Training caches (large, regenerable with the preprocess_* scripts)
+ml/cache_*/
+*.npz
+*.npy
 
 # OS
 .DS_Store
@@ -48,3 +53,7 @@ Thumbs.db
 # SSH keys — never commit private keys
 *.pem
 *.key
+
+# Per-subject ADNI tables (IDs + diagnosis); ADNI data may not be redistributed
+ml/results/metrics/final_cohort_*.csv
+ml/results/metrics/oof_*.csv

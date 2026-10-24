@@ -1,126 +1,72 @@
-# AI MRI Analysis - Backend
+# Backend and research pipeline
 
-This directory contains the Python backend for the AI MRI Analysis application. It serves a REST API built with FastAPI that provides data and machine learning predictions to the frontend.
+This folder holds the API, the deployed inference pipeline, and every script used during the research. The scripts are kept on purpose: together they are the experimental record behind the thesis.
 
-## Prerequisites
+## Final pipeline (what is deployed)
 
-- [Python 3.10+](https://www.python.org/downloads/)
-- [Docker & Docker Compose](https://www.docker.com/products/docker-desktop/) (Optional, for containerized execution)
+| Step | Script | Output |
+|---|---|---|
+| 1. Select one scan per patient | `train_cnn_cv.py` (`select_one_scan_per_patient`) | patient list with labels |
+| 2. Register to MNI152, skull strip, crop the hippocampal box | `preprocess_register_roi.py` | `cache_reg_binary_roi/<subject>.npy`, `cache_binary_roi_hires.npz` |
+| 3. Train and validate (5-fold, patient level) | `train_roi_binary.py` | metrics, figures, final model |
+| 4. Serve | `inference.py` + `api.py` | `/predict` |
 
-## Setup and Installation
+`inference.py` imports its preprocessing directly from steps 2 and 3, so the server applies exactly the transformation the model was trained on. This was checked: the server's input for a test subject matches the training cache with correlation 1.000.
 
-### 1. Create a Virtual Environment (Recommended)
+### Reproducing the final model
 
-Navigate to the root of the project (`e:\code\project`) and create a Python virtual environment:
-
-```bash
-python -m venv venv
+```powershell
+..\venv\Scripts\python.exe preprocess_register_roi.py      # about 2 hours on CPU, resumable
+$env:ROI_TAG="_final"; ..\venv\Scripts\python.exe train_roi_binary.py
 ```
 
-### 2. Activate the Virtual Environment
+Then copy the resulting `alzheimer_cnn_binary_roi_final.h5` to `models/final_binary_roi.h5`.
 
-**On Windows:**
-```bash
-.\venv\Scripts\activate
+### Data layout
+
+```
+data/
+├── Thesis_CNMCIAD_N3_841/ADNI/<subject>/...   first download (841 subjects)
+├── new/images/ADNI/<subject>/...              second download (1,744 subjects)
+├── new/meta/ADNI/*.xml                        per-image ADNI metadata
+└── cohort/
+    ├── selected_cohort.csv     labels for the first download
+    ├── merged_cohort.csv       Image ID to diagnosis for both downloads
+    └── final_cohort.csv        the 824 subjects of the final model, with sex and age
 ```
 
-**On macOS/Linux:**
-```bash
-source venv/bin/activate
-```
+## Research history
 
-### 3. Install Dependencies
+Every number below comes from patient-level 5-fold cross-validation. Logs are in `results/logs/`, metrics in `results/metrics/`.
 
-With the virtual environment active, install the required packages:
+| # | Experiment | Script | Result |
+|---|---|---|---|
+| 0 | Original single split (data leakage) | `train_cnn.py` | 82% accuracy, **invalid** |
+| 1 | Single central slice, 3 classes, 841 patients | `train_cnn_cv.py` | 50.9% accuracy |
+| 2 | Three slices, 3 classes | `train_cnn_cv.py` | 49.5% |
+| 3 | 3D CNN on the whole volume, 3 classes | `train_cnn_3d.py` | 48.5% |
+| 4 | Binary CN vs AD, single slice | `train_cnn_binary.py` | AUC 0.56 |
+| 5 | Reorientation to RAS | `train_cnn_binary.py` | AUC 0.65 |
+| 6 | MNI registration and skull stripping | `preprocess_register.py` | AUC 0.69 |
+| 7 | 3D CNN on registered volumes | `train_3d_binary.py` | AUC 0.58 |
+| 8 | Hippocampal region of interest | `train_roi_binary.py` | AUC 0.79 |
+| 9 | Left/right flip augmentation | `train_roi_binary.py` (`ROI_FLIP=1`) | AUC 0.78, rejected |
+| 10 | Full resolution ROI | `preprocess_register_roi.py` | AUC 0.80 |
+| 11 | **Second download, 824 subjects** | same | **AUC 0.80, accuracy 72.8%** |
+| 12 | Classical baselines, same folds | `baseline_classical.py` | LR 0.826, linear SVM 0.814, RF 0.799, RBF SVM 0.789; LR on the CNN's 3 slices 0.785 |
 
-```bash
-pip install -r requirements.txt
-```
+Key findings:
 
-## Running the API Locally
+* **Leakage.** The original 82% came from splitting by image instead of by patient. Each patient had several preprocessed copies of the same brain, so test brains were also in training.
+* **Mixed orientations.** 551 of the first 841 scans were stored as (I,P,L) and 290 as (R,A,S). Until they were reoriented, the network was comparing rotated anatomy.
+* **Registration and region of interest** gave the largest gains. Changing architectures did not.
+* **More data stabilized the result** without raising it, which marks the ceiling of this 2D approach.
+* **Classical models are competitive.** Logistic regression on the full 3D region (18 slices) beats the CNN (3 slices), but with the same 3 slices the CNN wins. The limit is how much of the region the model sees.
 
-Make sure you are in the `ml` directory:
+## Thesis figures
 
-```bash
-cd ml
-```
+`make_thesis_figures.py <output_dir> [--images]` regenerates every chart and MRI figure used in the thesis from the logs, metrics and caches.
 
-Run the server using `uvicorn` or by directly executing the python file. 
+## Training caches
 
-If you have already activated your virtual environment:
-
-```bash
-# Option 1 (using direct python execution)
-python api.py
-
-# Option 2 (using uvicorn directly for development)
-# This will enable auto-reload on code changes
-uvicorn api:app --reload --host 0.0.0.0 --port 8000
-```
-
-**Alternative: Running directly through the Virtual Environment (without activating it first)**
-If you haven't activated your environment, you can run the files directly by referencing the Python executable inside your `venv` folder (run this from the project root `e:\code\project`):
-
-**On Windows (PowerShell/CMD):**
-```bash
-.\venv\Scripts\python ml\api.py
-```
-
-**On macOS / Linux / WSL (Bash):**
-```bash
-# If the venv was created in Linux/WSL:
-./venv/bin/python ml/api.py
-
-# If the venv was created in Windows but you are using Bash:
-./venv/Scripts/python ml/api.py
-```
-
-The API will be available at `http://localhost:8000`. 
-You can view the interactive API documentation at: `http://localhost:8000/docs`.
-
-### Stopping the API
-Press `Ctrl + C` in the terminal where the API is running to stop it.
-
-## Training the CNN Model
-
-If you have updated the dataset or modified the Convolutional Neural Network architecture and need to generate a new `alzheimer_cnn_model.h5` model file, you can run the training script.
-
-If your virtual environment is **active** (run from the `ml` directory):
-```bash
-python train_cnn.py
-```
-
-If your virtual environment is **NOT active** (run from the `e:\code\project` root directory):
-
-**On Windows (PowerShell/CMD):**
-```bash
-.\venv\Scripts\python ml\train_cnn.py
-```
-
-**On macOS / Linux / WSL (Bash):**
-```bash
-# If the venv was created in Linux/WSL:
-./venv/bin/python ml/train_cnn.py
-
-# If the venv was created in Windows but you are using Bash:
-./venv/Scripts/python ml/train_cnn.py
-```
-
-## Running with Docker
-
-If you prefer to run the entire stack (including the frontend) using Docker, you can use the `docker-compose.yml` file located in the root directory.
-
-From the root directory (`e:\code\project`), run:
-
-```bash
-docker-compose up --build
-```
-
-This will build both backend and frontend images and start the containers. The backend will map to port `8000` and the frontend to port `3000`.
-
-## Project Structure
-
-- `api.py`: The main FastAPI application entry point, containing API routes, image loaders, and the CNN prediction logic.
-- `train_cnn.py`: A script to train the CNN model.
-- `Dockerfile`: Defines the Docker image setup for the backend.
-- `alzheimer_cnn_model.h5`: The trained TensorFlow/Keras model file (if it exists).
+The `cache_*` folders and `*.npz` files hold preprocessed data (several GB). They are regenerable and excluded from git and Docker.

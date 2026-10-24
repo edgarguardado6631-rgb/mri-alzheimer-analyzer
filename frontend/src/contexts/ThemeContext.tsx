@@ -1,36 +1,32 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { ThemeContext } from './theme';
 
-type ThemeContextType = {
-    isDark: boolean;
-    setIsDark: (dark: boolean) => void;
+const STORAGE_KEY = 'app-theme-dark';
+
+const readSavedTheme = (): boolean => {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved === null ? true : saved === 'true';
+  } catch {
+    return true;            // storage blocked (private window, etc.)
+  }
 };
 
-const ThemeContext = createContext<ThemeContextType>({
-    isDark: true,
-    setIsDark: () => { },
-});
-
-export const useTheme = () => useContext(ThemeContext);
-
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const [isDark, setIsDark] = useState(true);
+  const [isDark, setIsDark] = useState(readSavedTheme);
 
-    useEffect(() => {
-        // Check localStorage for saved preference
-        const saved = localStorage.getItem('app-theme-dark');
-        if (saved !== null) {
-            setIsDark(saved === 'true');
-        }
-    }, []);
+  const handleSetDark = (dark: boolean) => {
+    setIsDark(dark);
+    try {
+      localStorage.setItem(STORAGE_KEY, String(dark));
+    } catch {
+      // preference simply won't persist
+    }
+  };
 
-    const handleSetDark = (dark: boolean) => {
-        setIsDark(dark);
-        localStorage.setItem('app-theme-dark', String(dark));
-    };
-
-    return (
-        <ThemeContext.Provider value={{ isDark, setIsDark: handleSetDark }}>
-            {children}
-        </ThemeContext.Provider>
-    );
+  return (
+    <ThemeContext.Provider value={{ isDark, setIsDark: handleSetDark }}>
+      {children}
+    </ThemeContext.Provider>
+  );
 };

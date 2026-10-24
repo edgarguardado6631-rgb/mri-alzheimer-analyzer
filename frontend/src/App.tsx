@@ -4,7 +4,7 @@ import AppHeader from './components/AppHeader';
 import Welcome from './pages/Welcome';
 import DataViz from './pages/DataViz';
 import Settings from './pages/Settings';
-import { useTheme } from './contexts/ThemeContext';
+import { useTheme } from './contexts/theme';
 import './global.scss';
 
 const App = () => {

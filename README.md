@@ -1,116 +1,94 @@
-# MRI Alzheimer Analyzer
+# NeuroScan AI: Alzheimer's MRI Analyzer
 
-A web application for Alzheimer's disease classification from MRI scans using a fine-tuned VGG16 CNN. Upload a `.nii` or `.nii.gz` MRI file, get an instant 3-class prediction (CN / MCI / AD), and receive a Claude-powered clinical interpretation directly in the chat.
+A research prototype that classifies structural T1 MRI scans as **cognitively normal (CN)** or **Alzheimer's disease (AD)** and explains the result through a Claude-powered clinical chat. Built as the practical component of a master's thesis (MICD, Universidad de Guadalajara).
 
-## Tech Stack
+**Validated performance:** ROC AUC 0.80 ± 0.04 and 72.8% accuracy on 824 ADNI subjects, measured with patient-level 5-fold cross-validation (no subject appears in both training and test).
+
+> Research use only. The model supports, and never replaces, a clinical diagnosis.
+
+## How it works
+
+1. The uploaded scan is reoriented to a standard orientation (RAS).
+2. It is affinely registered to the MNI152 brain template, so every brain lines up.
+3. The skull is removed with the MNI152 brain mask.
+4. A box around both hippocampi is cropped, the region where Alzheimer's atrophy appears first.
+5. Three axial slices of that box feed a VGG16 network fine-tuned from ImageNet.
+
+The full research history (leakage discovery, the five architectures compared, and why each preprocessing step exists) is documented in [ml/README.md](ml/README.md).
+
+## Tech stack
 
 | Layer | Technology |
 |---|---|
 | Frontend | React 19, TypeScript, Vite, Carbon Design System v11 |
-| Backend | Python, FastAPI, TensorFlow/Keras, Anthropic Claude API |
-| Containerization | Docker, Docker Compose |
+| Backend | Python 3.12, FastAPI, TensorFlow/Keras, dipy, nilearn |
+| AI chat | Anthropic Claude API |
+| Deployment | Docker, AWS EC2, CloudFront, S3 |
 
-## Project Structure
+## Project structure
 
 ```
-mri-alzheimer-analyzer/
-├── frontend/          # React + TypeScript + Vite app (port 3000)
-├── ml/                # FastAPI backend + CNN model (port 8000)
-│   ├── api.py
-│   ├── train_cnn.py
-│   └── .env          # API keys (not committed — see below)
-├── docker-compose.yml
-└── README.md
+project/
+├── frontend/            React app (port 3000)
+├── ml/                  FastAPI backend, training and preprocessing scripts
+│   ├── api.py           REST API
+│   ├── inference.py     Deployed prediction pipeline
+│   ├── models/          final_binary_roi.h5 + final_metrics.json (not in git)
+│   └── results/         metrics, figures and logs from every experiment
+├── data/                ADNI data and cohort files (not in git, see below)
+└── docker-compose.yml
 ```
 
-## Getting Started
+## Getting started
 
-### Option 1 — Docker (recommended)
+### Docker
 
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000/docs
+Frontend at http://localhost:3000, API docs at http://localhost:8000/docs.
 
-### Option 2 — Local (Windows PowerShell)
-
-**1. Backend**
+### Local (Windows)
 
 ```powershell
-cd E:\code\project\ml
-..\venv\Scripts\python.exe -m uvicorn api:app --host 0.0.0.0 --port 8000 --reload
-```
-
-Wait ~15 seconds for TensorFlow to load the model before making requests.
-
-**2. Frontend** (new terminal)
-
-```powershell
-cd E:\code\project\frontend
-npm run dev
-```
-
-Open http://localhost:3000
-
-### Option 3 — Local (macOS / Linux)
-
-**Backend**
-
-```bash
 cd ml
-source ../venv/bin/activate
-uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+..\venv\Scripts\python.exe -m uvicorn api:app --port 8000
 ```
 
-**Frontend**
-
-```bash
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-## Environment Variables
+The backend needs about 15 seconds to load TensorFlow, the model and the MNI template. A prediction takes 15 to 60 seconds on CPU because each scan is registered to the template.
 
-Create `ml/.env` (copy from `ml/.env.example`):
+## Configuration
 
-```env
-# Required for Claude-powered clinical interpretation
-ANTHROPIC_API_KEY=sk-ant-...
+Copy `ml/.env.example` to `ml/.env` and set `ANTHROPIC_API_KEY`. The other variables are optional.
 
-# Production only — restrict CORS origins
-# ALLOWED_ORIGINS=https://your-domain.com
-```
+## Model and data
 
-Get your API key at https://console.anthropic.com
+Neither the model weights nor the MRI data are in the repository.
 
-## Model Weights
+* **Data:** ADNI data can only be obtained from https://adni.loni.usc.edu under its Data Use Agreement, which does not allow redistribution. Place the downloaded trees under `data/` as described in [ml/README.md](ml/README.md).
+* **Model:** copy `final_binary_roi.h5` and `final_metrics.json` into `ml/models/`, or rebuild them with the steps in [ml/README.md](ml/README.md).
 
-The trained model (`alzheimer_cnn_model.h5`, ~122 MB) is **not included** in the repository. To use the app:
+Without a model, `/predict` returns HTTP 503; every other endpoint still works.
 
-- **Option A — Train it yourself:**
-  ```powershell
-  cd E:\code\project\ml
-  ..\venv\Scripts\python.exe train_cnn.py
-  ```
-  Training takes ~10–20 minutes on CPU (400 samples, 15 epochs).
-
-- **Option B — Download pre-trained weights** and place `alzheimer_cnn_model.h5` inside `ml/`.
-
-## API Endpoints
+## API
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/predict` | POST | Upload `.nii`/`.nii.gz` — returns CNN classification + confidence |
-| `/ai/chat` | POST | Send conversation + scan context — returns Claude clinical interpretation |
-| `/data/stats` | GET | Cohort summary (patients, scans, accuracy) |
-| `/data/demographics` | GET | Class / sex / age distribution |
-| `/data/model-metrics` | GET | Per-class precision, recall, F1 from last training run |
-| `/health` | GET | Server + model load status |
-| `/docs` | GET | Interactive Swagger API documentation |
+| `/predict` | POST | Upload a `.nii` or `.nii.gz` T1 scan; returns CN/AD probabilities |
+| `/ai/chat` | POST | Conversation plus optional scan context; returns Claude's interpretation |
+| `/data/stats` | GET | Archive size, training cohort size, AUC and accuracy |
+| `/data/demographics` | GET | Diagnosis, sex and age distribution of the training cohort |
+| `/data/model-metrics` | GET | Full validation report of the deployed model |
+| `/data/patients` | GET | Patients available in the viewer |
+| `/health` | GET | Server and model status |
 
 ## License
 
-MIT
+MIT for the code. ADNI data is subject to the ADNI Data Use Agreement.
