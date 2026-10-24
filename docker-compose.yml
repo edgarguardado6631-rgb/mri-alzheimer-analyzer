@@ -1,22 +1,20 @@
-version: '3.8'
-
 services:
   backend:
     build:
-      context: .
-      dockerfile: ml/Dockerfile
+      context: ./ml
     ports:
       - "8000:8000"
     volumes:
-      - ./ml:/app
-      - ./data:/data
+      - ./data:/data:ro
+    env_file:
+      - ./ml/.env
     environment:
+      - DATA_ROOT=/data
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
 
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
       args:
         - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
     ports:

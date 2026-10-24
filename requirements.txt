@@ -1,8 +1,2 @@
-tensorflow
-nibabel
-numpy
-scikit-learn
-matplotlib
-fastapi
-uvicorn
-python-multipart
+# The backend and training dependencies live with the code in ml/.
+-r ml/requirements.txt
