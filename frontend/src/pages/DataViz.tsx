@@ -21,8 +21,9 @@ import {
 } from '@carbon/react';
 import { FolderOpen, Upload } from '@carbon/icons-react';
 import API_URL from '../config';
-import { getJson, classCode, CLASS_COLORS, SERVER_OFFLINE } from '../api';
-import type { DatasetStats, ModelMetrics } from '../api';
+import { getJson, postFormWithProgress, classCode, CLASS_COLORS } from '../api';
+import type { DatasetStats, ModelMetrics, UploadProgress } from '../api';
+import ScanProgress from '../components/ScanProgress';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type SourceMode = 'server' | 'directory' | 'file';
@@ -61,6 +62,7 @@ const DataViz = () => {
   const [viewerSessionId, setViewerSessionId] = React.useState<string | null>(null);
   const [uploadingViewer, setUploadingViewer] = React.useState(false);
   const [viewerError, setViewerError] = React.useState<string | null>(null);
+  const [viewerUpload, setViewerUpload] = React.useState<{ name: string; step: number; progress?: UploadProgress } | null>(null);
 
   const dirInputRef = React.useRef<HTMLInputElement>(null);
   const singleFileInputRef = React.useRef<HTMLInputElement>(null);
@@ -153,28 +155,24 @@ const DataViz = () => {
     setUploadingViewer(true);
     setViewerSessionId(null);
     setViewerError(null);
+    setViewerUpload({ name: file.name, step: 0 });
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const res = await fetch(`${API_URL}/data/viewer/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-      if (!res.ok) {
-        // CloudFront answers 502/503/504 when the backend instance is stopped
-        if ([502, 503, 504].includes(res.status)) throw new Error(SERVER_OFFLINE);
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail ?? `Upload failed (${res.status}).`);
-      }
-      const data = await res.json();
+      const data = await postFormWithProgress<{ session_id: string; max_slice: number }>(
+        '/data/viewer/upload',
+        formData,
+        (progress) =>
+          setViewerUpload({ name: file.name, step: progress.loaded < progress.total ? 0 : 1, progress }),
+      );
       setViewerSessionId(data.session_id);
       setMaxSlices(data.max_slice);
       setCurrentSlice(Math.floor(data.max_slice / 2));
     } catch (err) {
       console.error('Viewer upload error:', err);
-      // fetch rejects with a TypeError when the server cannot be reached at all
-      setViewerError(err instanceof TypeError ? SERVER_OFFLINE : err instanceof Error ? err.message : String(err));
+      setViewerError(err instanceof Error ? err.message : String(err));
     } finally {
+      setViewerUpload(null);
       setUploadingViewer(false);
     }
   };
@@ -751,13 +749,19 @@ const DataViz = () => {
                       padding: '1.5rem',
                     }}
                   >
-                    {isViewerLoading ? (
+                    {isViewerLoading && viewerUpload ? (
+                      <ScanProgress
+                        fileName={viewerUpload.name}
+                        active={viewerUpload.step}
+                        upload={viewerUpload.progress}
+                        steps={[
+                          { label: 'Uploading scan' },
+                          { label: 'Preparing slices', detail: 'The server reorients the volume to RAS.' },
+                        ]}
+                      />
+                    ) : isViewerLoading ? (
                       <InlineLoading
-                        description={
-                          sourceMode === 'server'
-                            ? 'Loading scan…'
-                            : 'Uploading and processing scan…'
-                        }
+                        description="Loading scan…"
                         status="active"
                         style={{ color: 'var(--cds-text-inverse)' }}
                       />

@@ -11,7 +11,9 @@ import {
   ChatBot,
 } from '@carbon/icons-react';
 import { getJson, runPrediction, CLASS_COLORS } from '../api';
-import type { DatasetStats } from '../api';
+import type { DatasetStats, PredictionPhase, UploadProgress } from '../api';
+import ScanProgress from '../components/ScanProgress';
+import type { ScanStep } from '../components/ScanProgress';
 import './Welcome.scss';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -61,6 +63,15 @@ const SUGGESTED_PROMPTS = [
 ];
 
 // ── Typing indicator ───────────────────────────────────────────────────────
+// Steps shown while a scan is analyzed; the server reports queued/running.
+const ANALYSIS_STEPS: ScanStep[] = [
+  { label: 'Uploading scan' },
+  { label: 'Waiting for the server', detail: 'Another scan is being analyzed first.' },
+  { label: 'Aligning to the MNI template and classifying', detail: 'Registration and the three networks usually take 20 to 60 seconds.' },
+  { label: 'Writing the clinical interpretation', detail: 'Claude is reviewing the result.' },
+];
+const ANALYSIS_STEP: Record<PredictionPhase, number> = { uploading: 0, queued: 1, running: 2 };
+
 const TypingIndicator = () => (
   <div className="typing-indicator">
     <span className="typing-dot" />
@@ -110,6 +121,7 @@ const Welcome = () => {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isTyping, setIsTyping] = useState(false);
+  const [analysis, setAnalysis] = useState<{ name: string; step: number; upload?: UploadProgress } | null>(null);
   const [conversationHistory, setConversationHistory] = useState<ConversationEntry[]>([]);
   const [scanContext, setScanContext] = useState<ScanResult | null>(null);
 
@@ -210,14 +222,17 @@ const Welcome = () => {
 
     const userMsg = `Uploaded scan for analysis: ${file.name}`;
     addMessage('user', `Uploading scan: ${file.name}`);
-    addMessage('assistant', 'Aligning the scan to the MNI brain template and extracting the hippocampal region. This usually takes 20 to 60 seconds.');
     setIsTyping(true);
+    setAnalysis({ name: file.name, step: 0 });
 
     const formData = new FormData();
     formData.append('file', file);
 
     try {
-      const result = await runPrediction<ScanResult & { processing_seconds?: number }>(formData);
+      const result = await runPrediction<ScanResult & { processing_seconds?: number }>(formData, (s) =>
+        setAnalysis({ name: file.name, step: ANALYSIS_STEP[s.phase], upload: s.upload }),
+      );
+      setAnalysis({ name: file.name, step: 3 });
 
       const ctx: ScanResult = {
         filename: file.name,
@@ -247,6 +262,7 @@ const Welcome = () => {
       addMessage('assistant', `I could not analyze the scan: ${error instanceof Error ? error.message : error}`);
     } finally {
       setIsTyping(false);
+      setAnalysis(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -318,7 +334,11 @@ const Welcome = () => {
                 </div>
                 <div className="message-body">
                   <span className="message-role">NeuroScan AI</span>
-                  <TypingIndicator />
+                  {analysis ? (
+                    <ScanProgress fileName={analysis.name} active={analysis.step} upload={analysis.upload} steps={ANALYSIS_STEPS} />
+                  ) : (
+                    <TypingIndicator />
+                  )}
                 </div>
               </div>
             )}
