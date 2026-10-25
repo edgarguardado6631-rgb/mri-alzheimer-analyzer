@@ -49,6 +49,8 @@ docker compose up --build
 
 Frontend at http://localhost:3000, API docs at http://localhost:8000/docs.
 
+> Not yet tested with the three-model ensemble. The backend image built from `ml/Dockerfile` is the one deployed and verified on AWS; the Compose setup (which also builds the frontend and mounts `data/`) has not been run since the switch.
+
 ### AWS
 
 `deploy.py` starts the EC2 backend, points CloudFront at its current address, uploads the three models, rebuilds the container and publishes the frontend to S3:
