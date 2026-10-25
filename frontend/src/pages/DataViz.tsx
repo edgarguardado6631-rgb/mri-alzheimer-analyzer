@@ -13,6 +13,7 @@ import {
   ComboBox,
   Tag,
   InlineLoading,
+  InlineNotification,
   Layer,
   ContentSwitcher,
   Switch,
@@ -20,7 +21,7 @@ import {
 } from '@carbon/react';
 import { FolderOpen, Upload } from '@carbon/icons-react';
 import API_URL from '../config';
-import { getJson, classCode, CLASS_COLORS } from '../api';
+import { getJson, classCode, CLASS_COLORS, SERVER_OFFLINE } from '../api';
 import type { DatasetStats, ModelMetrics } from '../api';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -59,6 +60,7 @@ const DataViz = () => {
   // Session-based viewer (used by Directory & File modes)
   const [viewerSessionId, setViewerSessionId] = React.useState<string | null>(null);
   const [uploadingViewer, setUploadingViewer] = React.useState(false);
+  const [viewerError, setViewerError] = React.useState<string | null>(null);
 
   const dirInputRef = React.useRef<HTMLInputElement>(null);
   const singleFileInputRef = React.useRef<HTMLInputElement>(null);
@@ -135,6 +137,7 @@ const DataViz = () => {
 
   const handleModeChange = (mode: SourceMode) => {
     setSourceMode(mode);
+    setViewerError(null);
     setSelectedPatient(null);
     setSelectedScan(null);
     setViewerSessionId(null);
@@ -149,6 +152,7 @@ const DataViz = () => {
   const uploadToViewer = async (file: File) => {
     setUploadingViewer(true);
     setViewerSessionId(null);
+    setViewerError(null);
     try {
       const formData = new FormData();
       formData.append('file', file);
@@ -156,13 +160,20 @@ const DataViz = () => {
         method: 'POST',
         body: formData,
       });
-      if (!res.ok) throw new Error('Upload failed');
+      if (!res.ok) {
+        // CloudFront answers 502/503/504 when the backend instance is stopped
+        if ([502, 503, 504].includes(res.status)) throw new Error(SERVER_OFFLINE);
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail ?? `Upload failed (${res.status}).`);
+      }
       const data = await res.json();
       setViewerSessionId(data.session_id);
       setMaxSlices(data.max_slice);
       setCurrentSlice(Math.floor(data.max_slice / 2));
     } catch (err) {
       console.error('Viewer upload error:', err);
+      // fetch rejects with a TypeError when the server cannot be reached at all
+      setViewerError(err instanceof TypeError ? SERVER_OFFLINE : err instanceof Error ? err.message : String(err));
     } finally {
       setUploadingViewer(false);
     }
@@ -713,6 +724,18 @@ const DataViz = () => {
                       </div>
                     </Column>
                   </>
+                )}
+
+                {viewerError && (
+                  <Column lg={16} md={8} sm={4}>
+                    <InlineNotification
+                      kind="error"
+                      title="Could not open the scan."
+                      subtitle={viewerError}
+                      onClose={() => setViewerError(null)}
+                      lowContrast
+                    />
+                  </Column>
                 )}
 
                 {/* ── Viewer tile (shared across all modes) ── */}

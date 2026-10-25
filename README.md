@@ -56,6 +56,7 @@ Frontend at http://localhost:3000, API docs at http://localhost:8000/docs.
 `deploy.py` starts the EC2 backend, points CloudFront at its current address, uploads the three models, rebuilds the container and publishes the frontend to S3:
 
 ```powershell
+venv\Scripts\python.exe deploy.py start    # turn the site on (about 5 min)
 venv\Scripts\python.exe deploy.py up       # deploy everything
 venv\Scripts\python.exe deploy.py status   # instance state and /health
 venv\Scripts\python.exe deploy.py down     # stop the instance when not in use

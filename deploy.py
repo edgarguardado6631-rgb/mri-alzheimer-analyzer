@@ -1,6 +1,8 @@
 """
 deploy.py — deploy NeuroScan AI to AWS (EC2 backend + S3/CloudFront frontend)
 ----------------------------------------------------------------------------
+    python deploy.py start      turn the site back on: start the instance and point CloudFront
+                                at it (the container restarts by itself), about 5 minutes
     python deploy.py up         start the backend instance, point CloudFront at it,
                                 upload the models, rebuild the container, publish the frontend
     python deploy.py backend    same as up, without the frontend
@@ -142,6 +144,9 @@ def main(cmd):
         deploy_backend(host)
         if cmd == "up":
             deploy_frontend()
+        wait_healthy()
+    elif cmd == "start":
+        point_cloudfront(start_instance())
         wait_healthy()
     elif cmd == "frontend":
         deploy_frontend()

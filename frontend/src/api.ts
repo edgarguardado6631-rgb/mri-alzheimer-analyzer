@@ -1,8 +1,18 @@
 import API_URL from './config';
 
+export const SERVER_OFFLINE =
+  'The analysis server is not responding. It may be turned off; try again once it is running.';
+
 /** Fetch JSON from the backend and throw the server's error detail on failure. */
 export async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, init);
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, init);
+  } catch {
+    throw new Error(SERVER_OFFLINE);        // network error: server unreachable
+  }
+  // CloudFront answers 502/503/504 when the backend instance is stopped
+  if ([502, 503, 504].includes(res.status)) throw new Error(SERVER_OFFLINE);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail ?? `Request failed (${res.status})`);
