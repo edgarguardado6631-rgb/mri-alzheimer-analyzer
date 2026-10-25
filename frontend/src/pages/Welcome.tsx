@@ -10,7 +10,7 @@ import {
   Information,
   ChatBot,
 } from '@carbon/icons-react';
-import { getJson, CLASS_COLORS } from '../api';
+import { getJson, runPrediction, CLASS_COLORS } from '../api';
 import type { DatasetStats } from '../api';
 import './Welcome.scss';
 
@@ -210,14 +210,14 @@ const Welcome = () => {
 
     const userMsg = `Uploaded scan for analysis: ${file.name}`;
     addMessage('user', `Uploading scan: ${file.name}`);
-    addMessage('assistant', 'Aligning the scan to the MNI brain template and extracting the hippocampal region. This usually takes 15 to 60 seconds.');
+    addMessage('assistant', 'Aligning the scan to the MNI brain template and extracting the hippocampal region. This usually takes 20 to 60 seconds.');
     setIsTyping(true);
 
     const formData = new FormData();
     formData.append('file', file);
 
     try {
-      const result = await getJson<ScanResult & { processing_seconds?: number }>('/predict', { method: 'POST', body: formData });
+      const result = await runPrediction<ScanResult & { processing_seconds?: number }>(formData);
 
       const ctx: ScanResult = {
         filename: file.name,

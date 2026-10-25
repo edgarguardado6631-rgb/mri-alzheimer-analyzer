@@ -10,6 +10,30 @@ export async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+interface PredictionJob<T> {
+  job_id?: string;
+  status: 'queued' | 'running' | 'done' | 'error';
+  result?: T;
+  detail?: string;
+}
+
+/**
+ * Upload a scan and wait for its result. The server answers at once with a job
+ * ID and analyzes the scan in the background (registration takes 15 to 60 s,
+ * close to CloudFront's origin timeout), so the result is polled.
+ */
+export async function runPrediction<T>(form: FormData, pollMs = 2000, timeoutMs = 600000): Promise<T> {
+  const { job_id } = await getJson<PredictionJob<T>>('/predict', { method: 'POST', body: form });
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    const job = await getJson<PredictionJob<T>>(`/predict/${job_id}`);
+    if (job.status === 'done' && job.result) return job.result;
+    if (job.status === 'error') throw new Error(job.detail ?? 'Prediction failed.');
+  }
+  throw new Error('The analysis is taking too long. Please try again later.');
+}
+
 export interface DatasetStats {
   total_patients: number;
   total_scans: number;

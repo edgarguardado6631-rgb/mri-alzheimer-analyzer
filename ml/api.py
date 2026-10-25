@@ -21,7 +21,6 @@ import nibabel as nib
 import pandas as pd
 from PIL import Image
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
-from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
 from pydantic import BaseModel, Field
@@ -63,6 +62,14 @@ CHAT_MAX_CHARS = 4000           # per message
 classifier: Optional[Classifier] = None
 _inference_lock = threading.Lock()     # registration is CPU heavy: one scan at a time
 
+# Prediction jobs. Registration takes 15 to 60 s, close to CloudFront's 60 s
+# origin timeout, so /predict only queues the scan and the browser polls
+# /predict/{job_id} until the result is ready.
+_jobs: dict = {}                       # job_id -> {"status", "created_at", "filename", ...}
+_JOB_TTL_SECONDS = 3600
+MAX_PENDING_JOBS = 5
+JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
 VIEWER_TEMP_DIR = tempfile.mkdtemp(prefix="neuroscan_viewer_")
 _viewer_sessions: dict = {}            # session_id -> {"path": str, "created_at": float}
 _SESSION_TTL_SECONDS = 3600
@@ -84,6 +91,8 @@ def _cleanup_viewer_sessions() -> None:
                     pass
         if expired:
             logger.info("Viewer cleanup removed %d expired session(s).", len(expired))
+        for jid in [j for j, info in list(_jobs.items()) if now - info["created_at"] > _JOB_TTL_SECONDS]:
+            _jobs.pop(jid, None)
 
 
 def _load_metrics() -> Optional[dict]:
@@ -257,42 +266,58 @@ def health_check():
 
 
 # ── Routes: prediction ─────────────────────────────────────────────────────
-def _classify_locked(path: str) -> dict:
-    with _inference_lock:
-        return classifier.classify(path)
+def _run_prediction_job(job_id: str, path: str) -> None:
+    job = _jobs[job_id]
+    try:
+        with _inference_lock:
+            job["status"] = "running"
+            result = classifier.classify(path)
+        result["filename"] = job["filename"]
+        job.update(status="done", result=result)
+    except Exception as e:
+        logger.error("Prediction error: %s", e, exc_info=True)
+        job.update(status="error", detail="Prediction failed. Please try again.")
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
 
 
-@app.post("/predict")
+@app.post("/predict", status_code=202)
 @limiter.limit("10/minute")
 async def predict(request: Request, file: UploadFile = File(...)):
     if classifier is None:
         raise HTTPException(status_code=503, detail="The model is not loaded on the server.")
+    pending = sum(1 for j in _jobs.values() if j["status"] in ("queued", "running"))
+    if pending >= MAX_PENDING_JOBS:
+        raise HTTPException(status_code=429, detail="The server is busy analyzing other scans. Please try again in a minute.")
 
     content, suffix = await _read_upload(file)
     tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    tmp.write(content)
+    tmp.close()
     try:
-        tmp.write(content)
-        tmp.close()
-        try:
-            shape = nib.load(tmp.name).shape
-            if len(shape) < 3:
-                raise ValueError
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid NIfTI file. Please upload a 3D T1 MRI scan.")
+        shape = nib.load(tmp.name).shape
+        if len(shape) < 3:
+            raise ValueError
+    except Exception:
+        os.remove(tmp.name)
+        raise HTTPException(status_code=400, detail="Invalid NIfTI file. Please upload a 3D T1 MRI scan.")
 
-        # Registration takes 15 to 60 s of CPU; run it off the event loop so the
-        # rest of the API stays responsive.
-        result = await run_in_threadpool(_classify_locked, tmp.name)
-        result["filename"] = file.filename
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Prediction error: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Prediction failed. Please try again.")
-    finally:
-        if os.path.exists(tmp.name):
-            os.remove(tmp.name)
+    job_id = uuid.uuid4().hex
+    _jobs[job_id] = {"status": "queued", "created_at": time.time(), "filename": file.filename}
+    threading.Thread(target=_run_prediction_job, args=(job_id, tmp.name), daemon=True).start()
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/predict/{job_id}")
+@limiter.limit("120/minute")
+def predict_status(request: Request, job_id: str):
+    if not JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=400, detail="Invalid job ID format.")
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found or has expired.")
+    return {k: job[k] for k in ("status", "result", "detail") if k in job}
 
 
 # ── Routes: dataset and model information ──────────────────────────────────

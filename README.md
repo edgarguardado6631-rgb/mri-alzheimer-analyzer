@@ -49,6 +49,18 @@ docker compose up --build
 
 Frontend at http://localhost:3000, API docs at http://localhost:8000/docs.
 
+### AWS
+
+`deploy.py` starts the EC2 backend, points CloudFront at its current address, uploads the three models, rebuilds the container and publishes the frontend to S3:
+
+```powershell
+venv\Scripts\python.exe deploy.py up       # deploy everything
+venv\Scripts\python.exe deploy.py status   # instance state and /health
+venv\Scripts\python.exe deploy.py down     # stop the instance when not in use
+```
+
+It needs the AWS CLI configured, `boto3`, and `neuroscan-key.pem` in the project root (never committed). `ec2-setup.sh` is the one-time setup of a new instance.
+
 ### Local (Windows)
 
 ```powershell
@@ -75,13 +87,14 @@ Neither the model weights nor the MRI data are in the repository.
 * **Data:** ADNI data can only be obtained from https://adni.loni.usc.edu under its Data Use Agreement, which does not allow redistribution. Place the downloaded trees under `data/` as described in [ml/README.md](ml/README.md).
 * **Model:** copy `final_full_roi_m1.keras`, `final_full_roi_m2.keras`, `final_full_roi_m3.keras` and `final_metrics.json` into `ml/models/`, or rebuild them with the steps in [ml/README.md](ml/README.md).
 
-Without a model, `/predict` returns HTTP 503; every other endpoint still works.
+Without a model, `/predict` returns HTTP 503; every other endpoint still works. A prediction runs as a background job because registration can take close to CloudFront's 60 s origin timeout; the frontend polls `/predict/{job_id}` every 2 s.
 
 ## API
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/predict` | POST | Upload a `.nii` or `.nii.gz` T1 scan; returns CN/AD probabilities |
+| `/predict` | POST | Upload a `.nii` or `.nii.gz` T1 scan; starts the analysis and returns `job_id` (HTTP 202) |
+| `/predict/{job_id}` | GET | Job status (`queued`, `running`, `done`, `error`) and, when done, the CN/AD probabilities |
 | `/ai/chat` | POST | Conversation plus optional scan context; returns Claude's interpretation |
 | `/data/stats` | GET | Archive size, training cohort size, AUC and accuracy |
 | `/data/demographics` | GET | Diagnosis, sex and age distribution of the training cohort |
