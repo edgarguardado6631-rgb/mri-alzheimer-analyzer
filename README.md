@@ -2,7 +2,7 @@
 
 A research prototype that classifies structural T1 MRI scans as **cognitively normal (CN)** or **Alzheimer's disease (AD)** and explains the result through a Claude-powered clinical chat. Built as the practical component of a master's thesis (MICD, Universidad de Guadalajara).
 
-**Validated performance:** ROC AUC 0.80 ± 0.04 and 72.8% accuracy on 824 ADNI subjects, measured with patient-level 5-fold cross-validation (no subject appears in both training and test).
+**Validated performance:** ROC AUC 0.87 ± 0.02 and 80.3% accuracy on 824 ADNI subjects, measured with patient-level 5-fold cross-validation (no subject appears in both training and test).
 
 > Research use only. The model supports, and never replaces, a clinical diagnosis.
 
@@ -33,7 +33,7 @@ project/
 ├── ml/                  FastAPI backend, training and preprocessing scripts
 │   ├── api.py           REST API
 │   ├── inference.py     Deployed prediction pipeline
-│   ├── models/          final_binary_roi.h5 + final_metrics.json (not in git)
+│   ├── models/          final_full_roi_m{1,2,3}.keras + final_metrics.json (models not in git)
 │   └── results/         metrics, figures and logs from every experiment
 ├── data/                ADNI data and cohort files (not in git, see below)
 └── docker-compose.yml
@@ -73,7 +73,7 @@ Copy `ml/.env.example` to `ml/.env` and set `ANTHROPIC_API_KEY`. The other varia
 Neither the model weights nor the MRI data are in the repository.
 
 * **Data:** ADNI data can only be obtained from https://adni.loni.usc.edu under its Data Use Agreement, which does not allow redistribution. Place the downloaded trees under `data/` as described in [ml/README.md](ml/README.md).
-* **Model:** copy `final_binary_roi.h5` and `final_metrics.json` into `ml/models/`, or rebuild them with the steps in [ml/README.md](ml/README.md).
+* **Model:** copy `final_full_roi_m1.keras`, `final_full_roi_m2.keras`, `final_full_roi_m3.keras` and `final_metrics.json` into `ml/models/`, or rebuild them with the steps in [ml/README.md](ml/README.md).
 
 Without a model, `/predict` returns HTTP 503; every other endpoint still works.
 

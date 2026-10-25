@@ -1,25 +1,37 @@
 {
-  "accuracy": 0.7282,
-  "cv_accuracy_mean": 0.7282,
-  "cv_accuracy_std": 0.0264,
-  "roc_auc": 0.7998,
-  "cv_auc_mean": 0.8044,
-  "cv_auc_std": 0.0434,
+  "accuracy": 0.8034,
+  "cv_accuracy_mean": 0.8034,
+  "cv_accuracy_std": 0.0144,
+  "roc_auc": 0.8651,
+  "cv_auc_mean": 0.8682,
+  "cv_auc_std": 0.0221,
+  "cv_fold_auc": [
+    0.8793,
+    0.9025,
+    0.8481,
+    0.8699,
+    0.8411
+  ],
+  "member_cv_auc": [
+    0.8501,
+    0.8579,
+    0.8586
+  ],
   "cv_folds": 5,
-  "evaluation": "patient-level 5-fold CV (OOF), 2D VGG16, MNI-registered hippocampal ROI, binary AD vs CN",
+  "evaluation": "patient-level 5-fold CV (OOF), mean of 3 full-region VGG16 runs, binary AD vs CN",
   "classes": [
     {
       "label": "CN (Cognitively Normal)",
-      "precision": 0.76,
-      "recall": 0.75,
-      "f1": 0.76,
+      "precision": 0.83,
+      "recall": 0.82,
+      "f1": 0.83,
       "support": 465
     },
     {
       "label": "AD (Alzheimer's Disease)",
-      "precision": 0.68,
-      "recall": 0.7,
-      "f1": 0.69,
+      "precision": 0.77,
+      "recall": 0.78,
+      "f1": 0.78,
       "support": 359
     }
   ],
@@ -39,16 +51,16 @@
       2
     ]
   },
-  "model": "VGG16 fine-tuned (block5), hippocampal ROI, MNI-registered",
+  "model": "Ensemble of 3 VGG16 (block5 fine-tuned) over all 18 axial slices of the hippocampal ROI, MNI-registered",
   "weighted_avg": {
-    "precision": 0.73,
-    "recall": 0.73,
-    "f1": 0.73
+    "precision": 0.8,
+    "recall": 0.8,
+    "f1": 0.8
   },
   "macro_avg": {
-    "precision": 0.72,
-    "recall": 0.72,
-    "f1": 0.72
+    "precision": 0.8,
+    "recall": 0.8,
+    "f1": 0.8
   },
   "confusion_matrix": {
     "labels": [
@@ -57,12 +69,12 @@
     ],
     "matrix": [
       [
-        348,
-        117
+        382,
+        83
       ],
       [
-        107,
-        252
+        79,
+        280
       ]
     ]
   },
@@ -71,8 +83,8 @@
     "Reorientation to canonical RAS",
     "Affine registration to MNI152 (2 mm)",
     "Skull stripping with the MNI152 brain mask",
-    "Bilateral hippocampal ROI crop (MNI x -40..40, y -45..2, z -34..2 mm)",
-    "Three axial slices as RGB channels, resized to 128x128"
+    "Bilateral hippocampal ROI crop (40 x 24 x 18 voxels)",
+    "18 axial slices resized to 128 x 128, grouped as 6 RGB images"
   ],
   "cohort": {
     "subjects": 824,

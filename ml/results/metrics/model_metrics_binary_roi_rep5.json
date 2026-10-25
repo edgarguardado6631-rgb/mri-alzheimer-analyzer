@@ -1,0 +1,43 @@
+{
+  "accuracy": 0.7379,
+  "cv_accuracy_mean": 0.7378,
+  "cv_accuracy_std": 0.0389,
+  "roc_auc": 0.8123,
+  "cv_auc_mean": 0.8138,
+  "cv_auc_std": 0.0385,
+  "cv_folds": 5,
+  "evaluation": "patient-level 5-fold CV (OOF), 2D VGG16, MNI-registered hippocampal ROI, binary AD vs CN",
+  "classes": [
+    {
+      "label": "CN (Cognitively Normal)",
+      "precision": 0.75,
+      "recall": 0.8,
+      "f1": 0.77,
+      "support": 465
+    },
+    {
+      "label": "AD (Alzheimer's Disease)",
+      "precision": 0.71,
+      "recall": 0.66,
+      "f1": 0.69,
+      "support": 359
+    }
+  ],
+  "test_samples": 824,
+  "epochs": 15,
+  "roi_box_mm": {
+    "x": [
+      -40,
+      40
+    ],
+    "y": [
+      -45,
+      2
+    ],
+    "z": [
+      -34,
+      2
+    ]
+  },
+  "model": "2D VGG16 fine-tuned, MNI-registered hippocampal ROI (3-slice), binary AD vs CN"
+}

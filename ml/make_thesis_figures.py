@@ -70,8 +70,10 @@ def fig_progression(out):
         ("+ volteo izquierda/derecha", 0.778, False),
         ("+ región a resolución completa", 0.798, True),
         ("+ segunda descarga (824 sujetos)", 0.804, True),
+        ("+ los 18 cortes de la región", 0.856, True),
+        ("+ media de 3 redes", 0.868, True),
     ]
-    fig, (a, b) = plt.subplots(1, 2, figsize=(11, 4.6), gridspec_kw={"wspace": 0.95})
+    fig, (a, b) = plt.subplots(1, 2, figsize=(11, 5.0), gridspec_kw={"wspace": 0.95})
 
     labels = [t[0] for t in three][::-1]
     vals = [t[1] for t in three][::-1]
@@ -135,19 +137,22 @@ def fig_confusion(out):
 
 
 def fig_roc(out):
-    """Out-of-fold ROC of the final model. The per-subject probabilities were
-    not stored during training, so the curve was digitized from the plot the
-    training run produced (results/figures/roc_curve_binary_roi_merged824.png);
-    the digitized area is 0.803 against the reported 0.800."""
-    path = os.path.join(BASE_DIR, "results", "metrics", "roc_final_digitized.csv")
-    if not os.path.exists(path):
-        return
-    roc = pd.read_csv(path)
+    """Out-of-fold ROC of the final ensemble (results/metrics/oof_ensemble_full.csv),
+    with the earlier 3-slice model for reference. The 3-slice run did not store
+    per-subject probabilities, so its curve was digitized from the plot that run
+    produced (results/figures/roc_curve_binary_roi_merged824.png)."""
+    from sklearn.metrics import roc_curve
+    oof = pd.read_csv(os.path.join(BASE_DIR, "results", "metrics", "oof_ensemble_full.csv"))
+    fpr, tpr, _ = roc_curve(oof.y_true, oof.prob_ad)
     m = json.load(open(os.path.join(BASE_DIR, "models", "final_metrics.json")))
     sens = m["classes"][1]["recall"]
     spec = m["classes"][0]["recall"]
     fig, ax = plt.subplots(figsize=(4.4, 4.0))
-    ax.plot(roc.fpr, roc.tpr, color=BLUE, lw=2, label=f"CNN, AUC = {m['roc_auc']:.2f}")
+    old = os.path.join(BASE_DIR, "results", "metrics", "roc_final_digitized.csv")
+    if os.path.exists(old):
+        roc = pd.read_csv(old)
+        ax.plot(roc.fpr, roc.tpr, color=GRAY, lw=1.5, label="3 cortes, AUC = 0.80")
+    ax.plot(fpr, tpr, color=BLUE, lw=2, label=f"Modelo final, AUC = {m['roc_auc']:.2f}")
     ax.plot([0, 1], [0, 1], ls="--", color=GRAY, lw=1, label="Azar, AUC = 0.50")
     ax.scatter([1 - spec], [sens], s=60, color=ORANGE, zorder=3, edgecolor="white", linewidth=2,
                label=f"Umbral 0.5: sens. {sens:.2f}, espec. {spec:.2f}")
@@ -214,18 +219,26 @@ def fig_model_comparison(out):
         return
     base = json.load(open(path, encoding="utf-8"))
     m = json.load(open(os.path.join(BASE_DIR, "models", "final_metrics.json")))
-    rows = [(k.replace("(vóxeles)", "(región 3D)").replace("(PCA 100)", "(región 3D, PCA)"),
+    rows = [(k.replace("(vóxeles)", "(región 3D)").replace("(PCA 100)", "(región 3D, PCA)")
+              .replace("Random Forest", "Bosque aleatorio").replace("SVM RBF", "SVM radial"),
              v["cv_auc_mean"], v["cv_auc_std"], False) for k, v in base.items()]
     lr3 = os.path.join(BASE_DIR, "results", "metrics", "baseline_lr_3slices.json")
     if os.path.exists(lr3):
         v = json.load(open(lr3))
         rows.append(("Regresión logística (3 cortes)", v["cv_auc_mean"], v["cv_auc_std"], False))
-    rows.append(("CNN VGG16 (3 cortes, este trabajo)", m["cv_auc_mean"], m["cv_auc_std"], True))
+    old = json.load(open(os.path.join(BASE_DIR, "results", "metrics", "model_metrics_binary_roi_merged824.json")))
+    rows.append(("CNN VGG16 (3 cortes)", old["cv_auc_mean"], old["cv_auc_std"], "cnn"))
+    runs = [json.load(open(os.path.join(BASE_DIR, "results", "metrics", f"model_metrics_binary_roi_full{t}.json")))
+            for t in ("", "_rep2", "_rep3")]
+    rows.append(("CNN VGG16 (18 cortes, una red)", float(np.mean([r["cv_auc_mean"] for r in runs])),
+                 float(np.mean([r["cv_auc_std"] for r in runs])), "cnn"))
+    rows.append(("Media de 3 redes (modelo final)", m["cv_auc_mean"], m["cv_auc_std"], True))
     rows.sort(key=lambda r: r[1])
-    fig, ax = plt.subplots(figsize=(7.2, 3.3))
+    fig, ax = plt.subplots(figsize=(7.2, 3.9))
     y = np.arange(len(rows))
     ax.barh(y, [r[1] for r in rows], xerr=[r[2] for r in rows], height=0.6,
-            color=[BLUE if r[3] else GRAY for r in rows], edgecolor="white", linewidth=2,
+            color=[BLUE if r[3] is True else ("#9cc2ee" if r[3] == "cnn" else GRAY) for r in rows],
+            edgecolor="white", linewidth=2,
             error_kw={"ecolor": INK_2, "elinewidth": 1, "capsize": 3})
     for yi, r in zip(y, rows):
         ax.text(r[1] + r[2] + 0.012, yi, f"{r[1]:.2f} ± {r[2]:.2f}", va="center", fontsize=9, color=INK)
@@ -312,6 +325,22 @@ def fig_roi_inputs(out):
     _save(fig, out, "fig_roi_entradas.png")
 
 
+def fig_roi_inputs_full(out):
+    """Input of the final model: the 18 axial slices of the region in 6 groups of 3.
+    One CN and one AD subject; the middle slice of each group is shown."""
+    from train_roi_fullregion import roi_crop_to_stack
+    d = np.load(os.path.join(BASE_DIR, "cache_binary_roi_hires.npz"))
+    picks = [("CN", int(np.where(d["y"] == 0)[0][0])), ("AD", int(np.where(d["y"] == 1)[0][0]))]
+    fig, axes = plt.subplots(2, 6, figsize=(10.5, 4.6))
+    for r, (grp, i) in enumerate(picks):
+        st = roi_crop_to_stack(d["X"][i])
+        for g in range(6):
+            _show(axes[r, g], np.rot90(st[:, :, 3 * g + 1]),
+                  f"{grp} {d['pids'][i]}\ngrupo {g + 1}" if g == 0 else f"grupo {g + 1}")
+    fig.tight_layout()
+    _save(fig, out, "fig_roi_18cortes.png")
+
+
 if __name__ == "__main__":
     out_dir = sys.argv[1]
     os.makedirs(out_dir, exist_ok=True)
@@ -320,6 +349,7 @@ if __name__ == "__main__":
     fig_roc(out_dir)
     fig_demographics(out_dir, os.path.join(BASE_DIR, "results", "metrics", "final_cohort_mmse.csv"))
     fig_model_comparison(out_dir)
+    fig_roi_inputs_full(out_dir)
     if "--images" in sys.argv:
         adni = os.path.join(ROOT, "data", "Thesis_CNMCIAD_N3_841", "ADNI")
         ipl = os.path.join(adni, "002_S_0295", "MPR__GradWarp__B1_Correction__N3", "2006-04-18_08_20_30.0", "I45107",

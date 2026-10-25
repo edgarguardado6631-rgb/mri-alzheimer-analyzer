@@ -96,6 +96,17 @@ if __name__ == "__main__":
     X = np.stack([roi_crop_to_stack(v[:, :, :n_keep]) for v in V]).astype("float32")
     print(f"=== Full-region ROI, AD vs CN: X={X.shape}, AD={int(y.sum())}, CN={int((y == 0).sum())} ===")
 
+    if os.environ.get("FINAL") == "1":
+        # One member of the deployed ensemble: same recipe as each CV fold, on all
+        # subjects (15 % held out only for early stopping).
+        X_tr, X_val, y_tr, y_val = train_test_split(
+            X, y, test_size=0.15, random_state=RANDOM_STATE, stratify=y)
+        model = train_one(X_tr, y_tr, X_val, y_val)
+        out = os.path.join(BASE_DIR, "models", f"final_full_roi{TAG}.keras")
+        model.save(out)
+        print(f"Saved {out}")
+        raise SystemExit(0)
+
     skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_STATE)
     fold_acc, fold_auc = [], []
     oof_prob = np.zeros(len(y))
