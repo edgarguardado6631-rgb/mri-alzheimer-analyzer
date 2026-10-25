@@ -92,12 +92,15 @@ def point_cloudfront(host):
 
 
 def ssh(host, command):
-    run(["ssh", "-i", KEY, "-o", "StrictHostKeyChecking=accept-new", f"ubuntu@{host}", command])
+    # -n: no stdin, so the Windows ssh client returns when the remote command ends
+    run(["ssh", "-n", "-i", KEY, "-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=30",
+         f"ubuntu@{host}", command])
 
 
 def deploy_backend(host):
-    ssh(host, f"cd {REMOTE_APP} && git fetch -q origin && git checkout -q master && git reset -q --hard origin/master "
-              f"&& mkdir -p ml/models")
+    # ec2-setup.sh clones the repo as root; hand it to ubuntu so git and scp can write to it.
+    ssh(host, f"sudo chown -R ubuntu:ubuntu {REMOTE_APP} && cd {REMOTE_APP} && git fetch -q origin "
+              f"&& git checkout -q master && git reset -q --hard origin/master && mkdir -p ml/models")
     files = [os.path.join(ROOT, "ml", "models", f) for f in MODEL_FILES]
     run(["scp", "-i", KEY, *files, f"ubuntu@{host}:{REMOTE_APP}/ml/models/"])
     # TensorFlow plus three networks is tight on 2 GB of RAM: make sure there is swap.
