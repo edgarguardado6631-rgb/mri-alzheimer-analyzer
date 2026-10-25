@@ -1,0 +1,29 @@
+{
+  "model": "VGG16 shared over 6 RGB groups of 3 axial slices (all 18 ROI slices), binary AD vs CN",
+  "cv_auc_mean": 0.8501,
+  "cv_auc_std": 0.0287,
+  "cv_accuracy_mean": 0.7767,
+  "cv_accuracy_std": 0.0216,
+  "fold_auc": [
+    0.8556,
+    0.9008,
+    0.8296,
+    0.8474,
+    0.8172
+  ],
+  "oof_auc": 0.8441,
+  "sensitivity": 0.7632,
+  "specificity": 0.7871,
+  "confusion_matrix": [
+    [
+      366,
+      99
+    ],
+    [
+      85,
+      274
+    ]
+  ],
+  "epochs": 15,
+  "cv_folds": 5
+}

@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.env
+cache_*
+*.npz
+*.npy
+results/
+models/experiments/
+*.log

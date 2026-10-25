@@ -1,0 +1,34 @@
+{
+  "accuracy": 0.6342,
+  "cv_accuracy_mean": 0.6341,
+  "cv_accuracy_std": 0.0134,
+  "roc_auc": 0.6917,
+  "cv_auc_mean": 0.6945,
+  "cv_auc_std": 0.0525,
+  "cv_folds": 5,
+  "evaluation": "patient-level 5-fold stratified CV (out-of-fold), binary AD vs CN",
+  "classes": [
+    {
+      "label": "CN (Cognitively Normal)",
+      "precision": 0.66,
+      "recall": 0.74,
+      "f1": 0.7,
+      "support": 312
+    },
+    {
+      "label": "AD (Alzheimer's Disease)",
+      "precision": 0.58,
+      "recall": 0.49,
+      "f1": 0.53,
+      "support": 232
+    }
+  ],
+  "macro_avg": {
+    "precision": 0.62,
+    "recall": 0.62,
+    "f1": 0.62
+  },
+  "test_samples": 544,
+  "epochs": 15,
+  "model": "VGG16 fine-tuned (block5), single-slice, binary AD vs CN, patient-level 5-fold CV"
+}

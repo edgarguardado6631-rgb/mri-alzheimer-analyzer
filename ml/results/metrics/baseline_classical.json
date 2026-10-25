@@ -1,0 +1,66 @@
+{
+  "Regresión logística (vóxeles)": {
+    "cv_auc_mean": 0.8264,
+    "cv_auc_std": 0.0474,
+    "cv_accuracy_mean": 0.7512,
+    "cv_accuracy_std": 0.045,
+    "sensitivity_AD": 0.7103,
+    "specificity_CN": 0.7828,
+    "per_fold_auc": [
+      0.9044,
+      0.8197,
+      0.7737,
+      0.8499,
+      0.784
+    ],
+    "seconds": 10.0
+  },
+  "SVM lineal (vóxeles)": {
+    "cv_auc_mean": 0.8142,
+    "cv_auc_std": 0.0444,
+    "cv_accuracy_mean": 0.739,
+    "cv_accuracy_std": 0.0495,
+    "sensitivity_AD": 0.7131,
+    "specificity_CN": 0.7591,
+    "per_fold_auc": [
+      0.8902,
+      0.8018,
+      0.7654,
+      0.8338,
+      0.7799
+    ],
+    "seconds": 506.9
+  },
+  "SVM RBF (PCA 100)": {
+    "cv_auc_mean": 0.7891,
+    "cv_auc_std": 0.0475,
+    "cv_accuracy_mean": 0.7075,
+    "cv_accuracy_std": 0.0416,
+    "sensitivity_AD": 0.6295,
+    "specificity_CN": 0.7677,
+    "per_fold_auc": [
+      0.8381,
+      0.7733,
+      0.7286,
+      0.8507,
+      0.7547
+    ],
+    "seconds": 8.8
+  },
+  "Random Forest (vóxeles)": {
+    "cv_auc_mean": 0.7987,
+    "cv_auc_std": 0.0416,
+    "cv_accuracy_mean": 0.7184,
+    "cv_accuracy_std": 0.0446,
+    "sensitivity_AD": 0.5571,
+    "specificity_CN": 0.843,
+    "per_fold_auc": [
+      0.8251,
+      0.7976,
+      0.7362,
+      0.8582,
+      0.7766
+    ],
+    "seconds": 55.4
+  }
+}

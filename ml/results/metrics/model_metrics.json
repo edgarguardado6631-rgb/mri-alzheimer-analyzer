@@ -1,0 +1,43 @@
+{
+  "accuracy": 0.4946,
+  "cv_accuracy_mean": 0.4947,
+  "cv_accuracy_std": 0.0439,
+  "cv_folds": 5,
+  "evaluation": "patient-level 5-fold stratified CV (out-of-fold)",
+  "classes": [
+    {
+      "label": "CN (Cognitively Normal)",
+      "precision": 0.53,
+      "recall": 0.47,
+      "f1": 0.5,
+      "support": 312
+    },
+    {
+      "label": "MCI (Mild Cognitive Impairment)",
+      "precision": 0.5,
+      "recall": 0.82,
+      "f1": 0.62,
+      "support": 297
+    },
+    {
+      "label": "AD (Alzheimer's Disease)",
+      "precision": 0.34,
+      "recall": 0.11,
+      "f1": 0.17,
+      "support": 232
+    }
+  ],
+  "macro_avg": {
+    "precision": 0.46,
+    "recall": 0.47,
+    "f1": 0.43
+  },
+  "weighted_avg": {
+    "precision": 0.47,
+    "recall": 0.49,
+    "f1": 0.45
+  },
+  "test_samples": 841,
+  "epochs": 15,
+  "model": "VGG16 fine-tuned (block5), patient-level 5-fold CV"
+}

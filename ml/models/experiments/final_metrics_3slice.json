@@ -1,0 +1,82 @@
+{
+  "accuracy": 0.7282,
+  "cv_accuracy_mean": 0.7282,
+  "cv_accuracy_std": 0.0264,
+  "roc_auc": 0.7998,
+  "cv_auc_mean": 0.8044,
+  "cv_auc_std": 0.0434,
+  "cv_folds": 5,
+  "evaluation": "patient-level 5-fold CV (OOF), 2D VGG16, MNI-registered hippocampal ROI, binary AD vs CN",
+  "classes": [
+    {
+      "label": "CN (Cognitively Normal)",
+      "precision": 0.76,
+      "recall": 0.75,
+      "f1": 0.76,
+      "support": 465
+    },
+    {
+      "label": "AD (Alzheimer's Disease)",
+      "precision": 0.68,
+      "recall": 0.7,
+      "f1": 0.69,
+      "support": 359
+    }
+  ],
+  "test_samples": 824,
+  "epochs": 15,
+  "roi_box_mm": {
+    "x": [
+      -40,
+      40
+    ],
+    "y": [
+      -45,
+      2
+    ],
+    "z": [
+      -34,
+      2
+    ]
+  },
+  "model": "VGG16 fine-tuned (block5), hippocampal ROI, MNI-registered",
+  "weighted_avg": {
+    "precision": 0.73,
+    "recall": 0.73,
+    "f1": 0.73
+  },
+  "macro_avg": {
+    "precision": 0.72,
+    "recall": 0.72,
+    "f1": 0.72
+  },
+  "confusion_matrix": {
+    "labels": [
+      "CN",
+      "AD"
+    ],
+    "matrix": [
+      [
+        348,
+        117
+      ],
+      [
+        107,
+        252
+      ]
+    ]
+  },
+  "task": "Binary classification: cognitively normal (CN) vs Alzheimer's disease (AD)",
+  "preprocessing": [
+    "Reorientation to canonical RAS",
+    "Affine registration to MNI152 (2 mm)",
+    "Skull stripping with the MNI152 brain mask",
+    "Bilateral hippocampal ROI crop (MNI x -40..40, y -45..2, z -34..2 mm)",
+    "Three axial slices as RGB channels, resized to 128x128"
+  ],
+  "cohort": {
+    "subjects": 824,
+    "CN": 465,
+    "AD": 359
+  }
+}

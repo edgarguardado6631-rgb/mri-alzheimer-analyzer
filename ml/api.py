@@ -1,134 +1,151 @@
 from dotenv import load_dotenv
 import pathlib
-load_dotenv(pathlib.Path(__file__).parent / '.env', override=True)
+load_dotenv(pathlib.Path(__file__).parent / ".env", override=True)
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
-from fastapi.responses import Response, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from pydantic import BaseModel
-from typing import List, Optional
-import tensorflow as tf
-import numpy as np
-import nibabel as nib
 import os
 import re
-import glob
 import io
+import json
+import glob
+import time
+import uuid
 import logging
 import tempfile
-import uuid
-import time
 import threading
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+from contextlib import asynccontextmanager
+from functools import lru_cache
+from typing import List, Optional
+
+import numpy as np
+import nibabel as nib
+import pandas as pd
+from PIL import Image
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response, JSONResponse
+from pydantic import BaseModel, Field
+from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+import anthropic
 
-# ── Logging ────────────────────────────────────────────────────────────────
+from inference import Classifier, CLASS_NAMES, METRICS_PATH
+
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("neuroscan")
 
-# ── App ────────────────────────────────────────────────────────────────────
-app = FastAPI()
+# ── Configuration ──────────────────────────────────────────────────────────
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_ROOT = os.path.abspath(os.environ.get("DATA_ROOT", os.path.join(BASE_DIR, "..", "data")))
 
-# ── Rate limiter ───────────────────────────────────────────────────────────
+# Folders holding ADNI subject trees (ADNI/<subject>/<series>/<date>/<image>/*.nii).
+# Override with IMAGE_DIRS, separated by os.pathsep.
+_default_image_dirs = [
+    os.path.join(DATA_ROOT, "Thesis_CNMCIAD_N3_841", "ADNI"),
+    os.path.join(DATA_ROOT, "new", "images", "ADNI"),
+]
+IMAGE_DIRS = [
+    os.path.abspath(d)
+    for d in (os.environ["IMAGE_DIRS"].split(os.pathsep) if os.environ.get("IMAGE_DIRS") else _default_image_dirs)
+]
+COHORT_CSV = os.path.join(DATA_ROOT, "cohort", "final_cohort.csv")
+
+MAX_UPLOAD_MB = 50
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+PATIENT_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+CHAT_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-5-5")
+CHAT_MAX_MESSAGES = 20          # history sent to Claude per request
+CHAT_MAX_CHARS = 4000           # per message
+
+classifier: Optional[Classifier] = None
+_inference_lock = threading.Lock()     # registration is CPU heavy: one scan at a time
+
+# Prediction jobs. Registration takes 15 to 60 s, close to CloudFront's 60 s
+# origin timeout, so /predict only queues the scan and the browser polls
+# /predict/{job_id} until the result is ready.
+_jobs: dict = {}                       # job_id -> {"status", "created_at", "filename", ...}
+_JOB_TTL_SECONDS = 3600
+MAX_PENDING_JOBS = 5
+JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+VIEWER_TEMP_DIR = tempfile.mkdtemp(prefix="neuroscan_viewer_")
+_viewer_sessions: dict = {}            # session_id -> {"path": str, "created_at": float}
+_SESSION_TTL_SECONDS = 3600
+
+
+def _cleanup_viewer_sessions() -> None:
+    """Remove viewer uploads older than the session TTL."""
+    while True:
+        time.sleep(300)
+        now = time.time()
+        expired = [sid for sid, info in list(_viewer_sessions.items())
+                   if now - info["created_at"] > _SESSION_TTL_SECONDS]
+        for sid in expired:
+            path = _viewer_sessions.pop(sid, {}).get("path", "")
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+        if expired:
+            logger.info("Viewer cleanup removed %d expired session(s).", len(expired))
+        for jid in [j for j, info in list(_jobs.items()) if now - info["created_at"] > _JOB_TTL_SECONDS]:
+            _jobs.pop(jid, None)
+
+
+def _load_metrics() -> Optional[dict]:
+    if not os.path.exists(METRICS_PATH):
+        return None
+    with open(METRICS_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    global classifier
+    try:
+        classifier = Classifier()
+        logger.info("Model and MNI template loaded.")
+    except Exception as e:
+        logger.error("Model failed to load, /predict will return 503: %s", e)
+    threading.Thread(target=_cleanup_viewer_sessions, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="NeuroScan AI", lifespan=lifespan)
+
 limiter = Limiter(key_func=get_remote_address, default_limits=[])
 app.state.limiter = limiter
+
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(status_code=429, content={"detail": "Too many requests. Please slow down."})
 
-# ── Security headers middleware ────────────────────────────────────────────
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "no-referrer"
         return response
 
+
 app.add_middleware(SecurityHeadersMiddleware)
-
-# ── CORS ───────────────────────────────────────────────────────────────────
-_raw_origins = os.environ.get("ALLOWED_ORIGINS", "*")
-allowed_origins = [o.strip() for o in _raw_origins.split(",")]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=False,          # no cookies needed
+    allow_origins=[o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",")],
+    allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
 
-# ── Constants ──────────────────────────────────────────────────────────────
-BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH    = os.path.join(BASE_DIR, "alzheimer_cnn_model.h5")
-MAX_UPLOAD_MB = 50
-MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
-# Allowlist: patient_id must be alphanumeric + hyphens/underscores only
-PATIENT_ID_RE = re.compile(r'^[A-Za-z0-9_\-]+$')
-
-model = None
-
-# ── Viewer session store ───────────────────────────────────────────────────
-# Temporary NIfTI files uploaded for the local-file viewer; keyed by UUID.
-VIEWER_TEMP_DIR = tempfile.mkdtemp(prefix="neuroscan_viewer_")
-_viewer_sessions: dict = {}          # session_id → {"path": str, "created_at": float}
-_SESSION_TTL_SECONDS = 3600         # purge files older than 1 hour
-
-
-def _cleanup_viewer_sessions() -> None:
-    """Background daemon: remove temp files for expired viewer sessions."""
-    while True:
-        time.sleep(300)             # check every 5 minutes
-        now = time.time()
-        expired = [
-            sid for sid, info in list(_viewer_sessions.items())
-            if now - info["created_at"] > _SESSION_TTL_SECONDS
-        ]
-        for sid in expired:
-            info = _viewer_sessions.pop(sid, {})
-            path = info.get("path", "")
-            if path and os.path.exists(path):
-                try:
-                    os.remove(path)
-                except Exception:
-                    pass
-        if expired:
-            logger.info(f"Viewer session cleanup: removed {len(expired)} expired session(s).")
-
-
-threading.Thread(target=_cleanup_viewer_sessions, daemon=True).start()
-
-
-# ── MRI display helper ─────────────────────────────────────────────────────
-def _mri_window(slice_arr: np.ndarray) -> tuple:
-    """
-    Return (vmin, vmax) for matplotlib using percentile-based windowing.
-
-    Plain min/max normalization collapses all brain tissue to near-white
-    whenever a few extreme-intensity voxels (RF hot-spots, vessels) exist.
-    Clipping to the 1st–99th percentile of *non-zero* voxels gives the
-    same result a radiologist would see with standard window/level.
-    """
-    nonzero = slice_arr[slice_arr > 0]
-    if nonzero.size == 0:
-        return float(slice_arr.min()), float(slice_arr.max()) + 1e-8
-    vmin = float(np.percentile(nonzero, 1))
-    vmax = float(np.percentile(nonzero, 99))
-    if vmax <= vmin:
-        vmax = vmin + 1.0
-    return vmin, vmax
-
-
-# ── Input validators ───────────────────────────────────────────────────────
+# ── Validation helpers ─────────────────────────────────────────────────────
 def validate_patient_id(patient_id: str) -> str:
     if not PATIENT_ID_RE.match(patient_id):
         raise HTTPException(status_code=400, detail="Invalid patient ID format.")
@@ -136,476 +153,310 @@ def validate_patient_id(patient_id: str) -> str:
 
 
 def validate_scan_filename(filename: str) -> str:
-    """Block path traversal and enforce NIfTI extension."""
-    if '..' in filename or filename.startswith('/') or '/' in filename or '\\' in filename:
+    if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename.")
-    if not (filename.endswith('.nii') or filename.endswith('.nii.gz')):
+    if not filename.endswith((".nii", ".nii.gz")):
         raise HTTPException(status_code=400, detail="Only .nii / .nii.gz files are supported.")
     return filename
 
 
-def safe_data_path(base: str, *parts: str) -> str:
-    """Resolve a path and ensure it stays within base directory."""
-    resolved = os.path.normpath(os.path.join(base, *parts))
-    if not resolved.startswith(os.path.normpath(base)):
-        raise HTTPException(status_code=403, detail="Access denied.")
-    return resolved
+def _is_within(base: str, path: str) -> bool:
+    base, path = os.path.abspath(base), os.path.abspath(path)
+    try:
+        return os.path.commonpath([base, path]) == base
+    except ValueError:          # different drives on Windows
+        return False
 
 
-# ── Keras version compatibility shim ──────────────────────────────────────
-class _CompatDense(tf.keras.layers.Dense):
-    """Strips unknown 'quantization_config' added by newer Keras versions."""
-    def __init__(self, *args, **kwargs):
-        kwargs.pop('quantization_config', None)
-        super().__init__(*args, **kwargs)
+async def _read_upload(file: UploadFile) -> tuple:
+    if not file.filename or not file.filename.endswith((".nii", ".nii.gz")):
+        raise HTTPException(status_code=400, detail="Only .nii or .nii.gz files are supported.")
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {MAX_UPLOAD_MB} MB.")
+    suffix = ".nii.gz" if file.filename.endswith(".nii.gz") else ".nii"
+    return content, suffix
 
 
-@app.on_event("startup")
-async def load_model():
-    global model
-    if os.path.exists(MODEL_PATH):
-        try:
-            model = tf.keras.models.load_model(
-                MODEL_PATH,
-                custom_objects={'Dense': _CompatDense},
-                compile=False,
-            )
-            logger.info("Model loaded successfully.")
-        except Exception as e:
-            logger.error(f"Failed to load model: {e}")
+# ── Volume loading and slice rendering ─────────────────────────────────────
+@lru_cache(maxsize=4)
+def _load_canonical(path: str) -> np.ndarray:
+    """Load a volume reoriented to RAS so axis 2 is always superior/inferior.
+    About two thirds of the cohort is stored as (I,P,L); without this the
+    viewer would show those brains rotated. Cached so the slice slider does
+    not reload a 70 MB file on every move."""
+    img = nib.as_closest_canonical(nib.load(path))
+    data = np.asarray(img.get_fdata(dtype=np.float32))
+    if data.ndim == 4:
+        data = data[..., 0]
+    if data.ndim != 3:
+        raise ValueError("Volume must be 3D.")
+    return data
+
+
+def _render_axial_png(path: str, slice_idx: int) -> bytes:
+    data = _load_canonical(path)
+    slice_idx = min(max(slice_idx, 0), data.shape[2] - 1)
+    sl = np.rot90(data[:, :, slice_idx])          # anterior up, patient left on image left
+    nonzero = sl[sl > 0]
+    if nonzero.size:
+        vmin, vmax = np.percentile(nonzero, [1, 99])
     else:
-        logger.warning("Model file not found. Predictions will be mocked until training is run.")
+        vmin, vmax = float(sl.min()), float(sl.max())
+    if vmax <= vmin:
+        vmax = vmin + 1.0
+    img = (np.clip((sl - vmin) / (vmax - vmin), 0, 1) * 255).astype(np.uint8)
+    buf = io.BytesIO()
+    Image.fromarray(img).save(buf, format="PNG")
+    return buf.getvalue()
 
 
-# ── Routes ─────────────────────────────────────────────────────────────────
+def _patient_dirs(patient_id: str) -> List[str]:
+    dirs = []
+    for root in IMAGE_DIRS:
+        d = os.path.join(root, patient_id)
+        if os.path.isdir(d) and _is_within(root, d):
+            dirs.append(d)
+    return dirs
+
+
+def _patient_scans(patient_id: str) -> List[str]:
+    files = []
+    for d in _patient_dirs(patient_id):
+        files += glob.glob(os.path.join(d, "**", "*.nii"), recursive=True)
+        files += glob.glob(os.path.join(d, "**", "*.nii.gz"), recursive=True)
+    return [f for f in files if "mask" not in f.lower()]
+
+
+def _find_scan(patient_id: str, scan_filename: str) -> str:
+    for f in _patient_scans(patient_id):
+        if os.path.basename(f) == scan_filename:
+            return f
+    raise HTTPException(status_code=404, detail="Scan not found.")
+
+
+@lru_cache(maxsize=1)
+def _dataset_counts() -> dict:
+    patients, scans = set(), 0
+    for root in IMAGE_DIRS:
+        if not os.path.isdir(root):
+            continue
+        for p in os.listdir(root):
+            if os.path.isdir(os.path.join(root, p)):
+                patients.add(p)
+        scans += len(glob.glob(os.path.join(root, "**", "*.nii"), recursive=True))
+    return {"patients": sorted(patients), "scans": scans}
+
+
+# ── Routes: status ─────────────────────────────────────────────────────────
 @app.get("/")
 def read_root():
-    return {"message": "Alzheimer's MRI Analysis API"}
+    return {"message": "NeuroScan AI, Alzheimer's MRI analysis API"}
 
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "model_loaded": model is not None}
+    metrics = _load_metrics()
+    return {
+        "status": "ok",
+        "model_loaded": classifier is not None,
+        "model": metrics.get("model") if metrics else None,
+        "task": metrics.get("task") if metrics else None,
+    }
 
 
-@app.post("/predict")
+# ── Routes: prediction ─────────────────────────────────────────────────────
+def _run_prediction_job(job_id: str, path: str) -> None:
+    job = _jobs[job_id]
+    try:
+        with _inference_lock:
+            job["status"] = "running"
+            result = classifier.classify(path)
+        result["filename"] = job["filename"]
+        job.update(status="done", result=result)
+    except Exception as e:
+        logger.error("Prediction error: %s", e, exc_info=True)
+        job.update(status="error", detail="Prediction failed. Please try again.")
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
+
+
+@app.post("/predict", status_code=202)
 @limiter.limit("10/minute")
 async def predict(request: Request, file: UploadFile = File(...)):
-    # Validate extension
-    if not (file.filename.endswith(".nii") or file.filename.endswith(".nii.gz")):
-        raise HTTPException(status_code=400, detail="Only .nii or .nii.gz files are supported.")
+    if classifier is None:
+        raise HTTPException(status_code=503, detail="The model is not loaded on the server.")
+    pending = sum(1 for j in _jobs.values() if j["status"] in ("queued", "running"))
+    if pending >= MAX_PENDING_JOBS:
+        raise HTTPException(status_code=429, detail="The server is busy analyzing other scans. Please try again in a minute.")
 
-    # Read with size cap
-    content = await file.read(MAX_UPLOAD_BYTES + 1)
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {MAX_UPLOAD_MB} MB.")
-
-    # Write to isolated temp file (no user-controlled path component)
-    suffix = '.nii.gz' if file.filename.endswith('.nii.gz') else '.nii'
+    content, suffix = await _read_upload(file)
     tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    tmp.write(content)
+    tmp.close()
     try:
-        tmp.write(content)
-        tmp.flush()
-        tmp.close()
-        temp_path = tmp.name
+        shape = nib.load(tmp.name).shape
+        if len(shape) < 3:
+            raise ValueError
+    except Exception:
+        os.remove(tmp.name)
+        raise HTTPException(status_code=400, detail="Invalid NIfTI file. Please upload a 3D T1 MRI scan.")
 
-        LABEL_MAP = {
-            0: "CN — Cognitively Normal",
-            1: "MCI — Mild Cognitive Impairment",
-            2: "AD — Alzheimer's Disease",
-        }
-        ANALYSIS_MAP = {
-            0: "The scan shows no significant patterns associated with Alzheimer's disease. Continued routine monitoring is recommended.",
-            1: "The scan shows patterns that may be consistent with Mild Cognitive Impairment. Clinical follow-up and longitudinal monitoring are advised.",
-            2: "The scan shows patterns consistent with Alzheimer's Disease. Further clinical correlation and specialist review are strongly recommended.",
-        }
-
-        # Validate it's actually a NIfTI file before feeding to the model
-        try:
-            img = nib.load(temp_path)
-            data = img.get_fdata()
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid NIfTI file. Please upload a valid .nii or .nii.gz scan.")
-
-        # Axis-aware slice selection
-        axcodes = nib.aff2axcodes(img.affine)
-        si_axis = next((idx for idx, c in enumerate(axcodes) if c in ['S', 'I']), 2)
-        mid_slice = data.shape[si_axis] // 2
-        if si_axis == 0:
-            slice_img = data[mid_slice, :, :]
-        elif si_axis == 1:
-            slice_img = data[:, mid_slice, :]
-        else:
-            slice_img = data[:, :, mid_slice]
-
-        slice_img = tf.image.resize(slice_img[..., np.newaxis], (128, 128)).numpy()
-        vmin, vmax = slice_img.min(), slice_img.max()
-        slice_img = (slice_img - vmin) / (vmax - vmin + 1e-8)
-        input_data = np.array([slice_img])
-
-        if model:
-            prediction = model.predict(input_data)
-            class_idx  = int(np.argmax(prediction[0]))
-            confidence = float(prediction[0][class_idx])
-            label      = LABEL_MAP.get(class_idx, f"Unknown class {class_idx}")
-            analysis   = ANALYSIS_MAP.get(class_idx, "Further clinical correlation recommended.")
-            all_probs  = prediction[0].tolist()
-        else:
-            import random
-            class_idx  = random.randint(0, 2)
-            confidence = random.uniform(0.7, 0.99)
-            label      = f"MOCK — {LABEL_MAP[class_idx]}"
-            analysis   = "This is a mock result. Train the model to get real predictions."
-            all_probs  = []
-
-        return {
-            "prediction":       label,
-            "confidence":       confidence,
-            "analysis":         analysis,
-            "class_index":      class_idx,
-            "all_probabilities": all_probs,
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Prediction error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Prediction failed. Please try again.")
-    finally:
-        if os.path.exists(tmp.name):
-            os.remove(tmp.name)
+    job_id = uuid.uuid4().hex
+    _jobs[job_id] = {"status": "queued", "created_at": time.time(), "filename": file.filename}
+    threading.Thread(target=_run_prediction_job, args=(job_id, tmp.name), daemon=True).start()
+    return {"job_id": job_id, "status": "queued"}
 
 
+@app.get("/predict/{job_id}")
+@limiter.limit("120/minute")
+def predict_status(request: Request, job_id: str):
+    if not JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=400, detail="Invalid job ID format.")
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found or has expired.")
+    return {k: job[k] for k in ("status", "result", "detail") if k in job}
+
+
+# ── Routes: dataset and model information ──────────────────────────────────
 @app.get("/data/stats")
 def get_stats():
-    try:
-        base_path = "data"
-        adni_path = os.path.join(base_path, "Test 2", "ADNI")
-
-        total_patients = 0
-        total_scans    = 0
-
-        if os.path.exists(adni_path):
-            patients_dirs = [d for d in os.listdir(adni_path) if os.path.isdir(os.path.join(adni_path, d))]
-            total_patients = len(patients_dirs)
-            nii_files   = glob.glob(os.path.join(adni_path, "**", "*.nii"),    recursive=True)
-            nii_gz_files = glob.glob(os.path.join(adni_path, "**", "*.nii.gz"), recursive=True)
-            total_scans = len(nii_files) + len(nii_gz_files)
-
-        return {
-            "total_patients":  total_patients,
-            "scans_processed": total_scans,
-            "model_accuracy":  0.82,
-        }
-    except Exception as e:
-        logger.error(f"Stats error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not retrieve stats.")
+    counts = _dataset_counts()
+    metrics = _load_metrics() or {}
+    cohort = metrics.get("cohort", {})
+    return {
+        "total_patients": len(counts["patients"]),
+        "total_scans": counts["scans"],
+        "training_subjects": cohort.get("subjects", 0),
+        "model_accuracy": metrics.get("accuracy", 0.0),
+        "model_auc": metrics.get("cv_auc_mean", 0.0),
+    }
 
 
 @app.get("/data/model-metrics")
 def get_model_metrics():
-    import json
-    metrics_path = os.path.join(BASE_DIR, "model_metrics.json")
-    if not os.path.exists(metrics_path):
-        raise HTTPException(status_code=404, detail="Model metrics not found. Run training first.")
-    try:
-        with open(metrics_path, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Metrics read error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not read model metrics.")
+    metrics = _load_metrics()
+    if metrics is None:
+        raise HTTPException(status_code=404, detail="Model metrics not found.")
+    return metrics
 
 
 @app.get("/data/demographics")
 def get_demographics():
+    if not os.path.exists(COHORT_CSV):
+        return {"groups": [], "sex": [], "age_bins": []}
     try:
-        base_path = "data"
-        csv_files = glob.glob(os.path.join(base_path, "*.csv"))
-        if not csv_files:
-            return {"groups": [], "sex": [], "age_bins": []}
-
-        import csv
-        from collections import defaultdict
-
-        group_counts: dict = defaultdict(int)
-        sex_counts:   dict = defaultdict(int)
-        age_values:   list = []
-        seen_subjects: set = set()
-
-        with open(csv_files[0], newline='', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                subject = row.get("Subject", "").strip()
-                if subject in seen_subjects:
-                    continue
-                seen_subjects.add(subject)
-                group   = row.get("Group", "").strip()
-                sex     = row.get("Sex",   "").strip()
-                age_str = row.get("Age",   "").strip()
-                if group:
-                    group_counts[group] += 1
-                if sex:
-                    sex_counts[sex] += 1
-                if age_str.isdigit():
-                    age_values.append(int(age_str))
-
-        age_bins: dict = defaultdict(int)
-        for age in age_values:
-            bin_start = (age // 10) * 10
-            age_bins[f"{bin_start}–{bin_start + 9}"] += 1
-
+        df = pd.read_csv(COHORT_CSV).drop_duplicates("Subject ID")
+        bins = (df["Age"].dropna() // 10 * 10).astype(int)
         return {
-            "groups":   [{"label": k, "count": v} for k, v in sorted(group_counts.items())],
-            "sex":      [{"label": k, "count": v} for k, v in sorted(sex_counts.items())],
-            "age_bins": [{"label": k, "count": v} for k, v in sorted(age_bins.items())],
+            "groups": [{"label": k, "count": int(v)} for k, v in df["Research Group"].value_counts().sort_index().items()],
+            "sex": [{"label": k, "count": int(v)} for k, v in df["Sex"].value_counts().sort_index().items()],
+            "age_bins": [{"label": f"{b} to {b + 9}", "count": int(v)} for b, v in bins.value_counts().sort_index().items()],
         }
     except Exception as e:
-        logger.error(f"Demographics error: {e}", exc_info=True)
+        logger.error("Demographics error: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="Could not retrieve demographics.")
 
 
 @app.get("/data/patients")
 def get_patients():
-    try:
-        base_path = "data"
-        adni_path = os.path.join(base_path, "Test 2", "ADNI")
-        if os.path.exists(adni_path):
-            patients = [d for d in os.listdir(adni_path) if os.path.isdir(os.path.join(adni_path, d))]
-            return {"patients": sorted(patients)}
-
-        files = (
-            glob.glob(os.path.join(base_path, "**", "*.nii"),    recursive=True) +
-            glob.glob(os.path.join(base_path, "**", "*.nii.gz"), recursive=True)
-        )
-        patients = set()
-        for f in files:
-            parts = f.split(os.sep)
-            for part in parts:
-                if "_" in part and len(part.split("_")) == 3:
-                    patients.add(part)
-        return {"patients": sorted(list(patients))}
-    except Exception as e:
-        logger.error(f"Patients list error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not retrieve patient list.")
+    return {"patients": _dataset_counts()["patients"]}
 
 
 @app.get("/data/image/{patient_id}/scans")
 def get_patient_scans(patient_id: str):
     patient_id = validate_patient_id(patient_id)
-    try:
-        base_path = "data"
-        adni_path = os.path.join(base_path, "Test 2", "ADNI")
-        patient_dir = safe_data_path(adni_path, patient_id)
-
-        if os.path.exists(patient_dir):
-            files = (
-                glob.glob(os.path.join(patient_dir, "**", "*.nii"),    recursive=True) +
-                glob.glob(os.path.join(patient_dir, "**", "*.nii.gz"), recursive=True)
-            )
-        else:
-            files = (
-                glob.glob(os.path.join(base_path, "**", f"*{patient_id}*.nii"),    recursive=True) +
-                glob.glob(os.path.join(base_path, "**", f"*{patient_id}*.nii.gz"), recursive=True)
-            )
-
-        scans = [os.path.basename(f) for f in files]
-        return {"scans": sorted(list(set(scans)))}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Scans list error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not retrieve scan list.")
+    return {"scans": sorted({os.path.basename(f) for f in _patient_scans(patient_id)})}
 
 
 @app.get("/data/image/{patient_id}/{scan_filename}/metadata")
 def get_image_metadata(patient_id: str, scan_filename: str):
-    patient_id    = validate_patient_id(patient_id)
-    scan_filename = validate_scan_filename(scan_filename)
+    path = _find_scan(validate_patient_id(patient_id), validate_scan_filename(scan_filename))
     try:
-        base_path = "data"
-        adni_path = os.path.join(base_path, "Test 2", "ADNI", patient_id)
-        pattern   = safe_data_path(adni_path, "**", scan_filename) if os.path.exists(adni_path) \
-                    else os.path.join(base_path, "**", scan_filename)
-
-        files = glob.glob(pattern, recursive=True)
-        if not files:
-            raise HTTPException(status_code=404, detail="Scan not found.")
-
-        img = nib.load(files[0])
-        return {
-            "shape":     img.shape,
-            "min_slice": 0,
-            "max_slice": img.shape[2] - 1,
-            "file":      os.path.basename(files[0]),
-        }
-    except HTTPException:
-        raise
+        shape = _load_canonical(path).shape
     except Exception as e:
-        logger.error(f"Metadata error: {e}", exc_info=True)
+        logger.error("Metadata error: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="Could not read scan metadata.")
+    return {"shape": list(shape), "min_slice": 0, "max_slice": shape[2] - 1, "file": scan_filename}
 
 
 @app.get("/data/image/{patient_id}/{scan_filename}/slice/{slice_idx}")
 def get_image_slice(patient_id: str, scan_filename: str, slice_idx: int):
-    patient_id    = validate_patient_id(patient_id)
-    scan_filename = validate_scan_filename(scan_filename)
-
     if slice_idx < 0:
         raise HTTPException(status_code=400, detail="Slice index must be non-negative.")
-
+    path = _find_scan(validate_patient_id(patient_id), validate_scan_filename(scan_filename))
     try:
-        base_path = "data"
-        adni_path = os.path.join(base_path, "Test 2", "ADNI", patient_id)
-        pattern   = safe_data_path(adni_path, "**", scan_filename) if os.path.exists(adni_path) \
-                    else os.path.join(base_path, "**", scan_filename)
-
-        files = glob.glob(pattern, recursive=True)
-        if not files:
-            raise HTTPException(status_code=404, detail="Scan not found.")
-
-        img  = nib.load(files[0])
-        data = img.get_fdata()
-
-        # Clamp to valid range
-        slice_idx = min(slice_idx, data.shape[2] - 1)
-        slice_img = np.rot90(data[:, :, slice_idx])
-        vmin, vmax = _mri_window(slice_img)
-
-        fig = plt.figure(figsize=(4, 4))
-        try:
-            plt.imshow(slice_img, cmap='gray', vmin=vmin, vmax=vmax)
-            plt.axis('off')
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
-            buf.seek(0)
-            return Response(content=buf.getvalue(), media_type="image/png")
-        finally:
-            plt.close(fig)
-
-    except HTTPException:
-        raise
+        return Response(content=_render_axial_png(path, slice_idx), media_type="image/png")
     except Exception as e:
-        logger.error(f"Slice render error: {e}", exc_info=True)
+        logger.error("Slice render error: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="Could not render scan slice.")
 
 
-# ── Local viewer: session upload & slice ──────────────────────────────────
-
+# ── Routes: local file viewer ──────────────────────────────────────────────
 @app.post("/data/viewer/upload")
 @limiter.limit("30/minute")
 async def viewer_upload(request: Request, file: UploadFile = File(...)):
-    """Accept a client-side NIfTI file, validate it, store in a temp session, and return slice info."""
-    if not (file.filename.endswith(".nii") or file.filename.endswith(".nii.gz")):
-        raise HTTPException(status_code=400, detail="Only .nii or .nii.gz files are supported.")
-
-    content = await file.read(MAX_UPLOAD_BYTES + 1)
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Maximum allowed size is {MAX_UPLOAD_MB} MB.",
-        )
-
+    content, suffix = await _read_upload(file)
     session_id = str(uuid.uuid4())
-    suffix = ".nii.gz" if file.filename.endswith(".nii.gz") else ".nii"
     dest_path = os.path.join(VIEWER_TEMP_DIR, f"{session_id}{suffix}")
-
+    with open(dest_path, "wb") as dest:
+        dest.write(content)
     try:
-        with open(dest_path, "wb") as dest:
-            dest.write(content)
-
-        # Validate NIfTI and extract shape
-        try:
-            img = nib.load(dest_path)
-            if len(img.shape) < 3:
-                raise ValueError("Volume must have at least 3 dimensions.")
-            max_slice = int(img.shape[2]) - 1
-        except Exception:
-            os.remove(dest_path)
-            raise HTTPException(status_code=400, detail="Invalid or unsupported NIfTI file.")
-
-        _viewer_sessions[session_id] = {
-            "path": dest_path,
-            "created_at": time.time(),
-        }
-        return {"session_id": session_id, "max_slice": max_slice, "filename": file.filename}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        if os.path.exists(dest_path):
-            os.remove(dest_path)
-        logger.error(f"Viewer upload error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Upload failed. Please try again.")
+        max_slice = _load_canonical(dest_path).shape[2] - 1
+    except Exception:
+        os.remove(dest_path)
+        raise HTTPException(status_code=400, detail="Invalid or unsupported NIfTI file.")
+    _viewer_sessions[session_id] = {"path": dest_path, "created_at": time.time()}
+    return {"session_id": session_id, "max_slice": int(max_slice), "filename": file.filename}
 
 
 @app.get("/data/viewer/{session_id}/slice/{slice_idx}")
 def get_viewer_slice(session_id: str, slice_idx: int):
-    """Render a PNG slice from a previously uploaded viewer session file."""
-    # Validate session_id is a well-formed UUID to prevent path tricks
     try:
         uuid.UUID(session_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid session ID format.")
-
     if slice_idx < 0:
         raise HTTPException(status_code=400, detail="Slice index must be non-negative.")
-
     session = _viewer_sessions.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found or has expired.")
-
-    file_path = session["path"]
-    if not os.path.exists(file_path):
+    if not session or not os.path.exists(session["path"]):
         _viewer_sessions.pop(session_id, None)
-        raise HTTPException(status_code=404, detail="Session file has been cleaned up.")
-
+        raise HTTPException(status_code=404, detail="Session not found or has expired.")
     try:
-        img  = nib.load(file_path)
-        data = img.get_fdata()
-        slice_idx = min(slice_idx, data.shape[2] - 1)
-        slice_img = np.rot90(data[:, :, slice_idx])
-        vmin, vmax = _mri_window(slice_img)
-
-        fig = plt.figure(figsize=(4, 4))
-        try:
-            plt.imshow(slice_img, cmap="gray", vmin=vmin, vmax=vmax)
-            plt.axis("off")
-            buf = io.BytesIO()
-            plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0)
-            buf.seek(0)
-            return Response(content=buf.getvalue(), media_type="image/png")
-        finally:
-            plt.close(fig)
-
-    except HTTPException:
-        raise
+        return Response(content=_render_axial_png(session["path"], slice_idx), media_type="image/png")
     except Exception as e:
-        logger.error(f"Viewer slice error: {e}", exc_info=True)
+        logger.error("Viewer slice error: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="Could not render scan slice.")
 
 
-# ── Claude AI chat ─────────────────────────────────────────────────────────
-CLINICAL_SYSTEM_PROMPT = """You are NeuroScan AI, a clinical decision-support assistant specialising in Alzheimer's disease MRI analysis.
+# ── Routes: Claude clinical chat ───────────────────────────────────────────
+def _build_system_prompt() -> str:
+    m = _load_metrics() or {}
+    perf = ""
+    if m:
+        perf = (f"Validated performance (patient-level 5-fold cross-validation on {m.get('cohort', {}).get('subjects', '?')} "
+                f"ADNI subjects): ROC AUC {m.get('cv_auc_mean', 0):.2f}, accuracy {m.get('accuracy', 0) * 100:.0f}%, "
+                f"AD sensitivity {m['classes'][1]['recall'] * 100:.0f}%, CN specificity {m['classes'][0]['recall'] * 100:.0f}%.")
+    return f"""You are NeuroScan AI, a clinical decision support assistant for a research prototype that analyses structural T1 MRI for Alzheimer's disease.
 
-You help clinicians interpret CNN model predictions from structural MRI scans processed with the ADNI dataset pipeline. The model classifies scans into three categories:
-- CN (Cognitively Normal): No significant patterns associated with cognitive decline
-- MCI (Mild Cognitive Impairment): Early-stage changes; elevated risk for progression to AD
-- AD (Alzheimer's Disease): Patterns consistent with Alzheimer's disease
+The classifier is binary. It separates cognitively normal (CN) subjects from Alzheimer's disease (AD). It does not detect mild cognitive impairment, and it was never trained on MCI cases, so an MCI patient may be labelled either way.
 
-When a scan result is provided to you, structure your response as follows:
-1. Briefly confirm the classification and confidence level in plain clinical language
-2. Explain what the result implies for this patient category
-3. Suggest relevant next clinical steps or monitoring considerations
-4. Note any caveats (confidence threshold, model limitations, need for longitudinal data)
+How the model works: each scan is reoriented, affinely registered to the MNI152 template, skull stripped, and cropped to a box around both hippocampi, the region where Alzheimer's atrophy appears earliest. All 18 axial slices of that box feed three VGG16 networks fine-tuned from ImageNet, and their probabilities are averaged. {perf}
 
-For general questions, answer concisely about MRI analysis, the detection pipeline, or Alzheimer's disease context.
+When a scan result is provided:
+1. Restate the classification and the probability in plain clinical language.
+2. Explain what it suggests, keeping in mind that roughly one in five predictions is wrong at this performance level.
+3. Suggest sensible next steps (cognitive testing, specialist referral, longitudinal imaging).
+4. State the limits: research use only, single time point, binary model, trained only on ADNI data.
 
-Always be evidence-based and remind the user that AI predictions are decision-support tools — final diagnosis must be made by a qualified clinician. Keep responses clear and appropriately concise."""
+For general questions, answer concisely about the pipeline, MRI analysis, or Alzheimer's disease. Never present the prediction as a diagnosis. A qualified clinician makes the final decision."""
 
 
 class ChatMessage(BaseModel):
-    role: str
-    content: str
+    role: str = Field(pattern="^(user|assistant)$")
+    content: str = Field(min_length=1, max_length=CHAT_MAX_CHARS)
 
 
 class ScanContext(BaseModel):
@@ -617,55 +468,72 @@ class ScanContext(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    messages: List[ChatMessage]
+    messages: List[ChatMessage] = Field(min_length=1)
     scan_context: Optional[ScanContext] = None
+
+
+_chat_client: Optional[anthropic.AsyncAnthropic] = None
+
+
+def _get_chat_client() -> anthropic.AsyncAnthropic:
+    global _chat_client
+    if _chat_client is None:
+        _chat_client = anthropic.AsyncAnthropic()
+    return _chat_client
 
 
 @app.post("/ai/chat")
 @limiter.limit("20/hour")
 async def ai_chat(request: Request, req: ChatRequest):
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    if not os.environ.get("ANTHROPIC_API_KEY"):
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured on the server.")
 
+    system = _build_system_prompt()
+    if req.scan_context:
+        ctx = req.scan_context
+        probs = "\n".join(
+            f"  {CLASS_NAMES.get(i, f'class {i}')}: {p * 100:.1f}%"
+            for i, p in enumerate(ctx.all_probabilities)
+        ) or "  not available"
+        system += (f"\n\nScan under review: {ctx.filename}\nModel output: {ctx.prediction} "
+                   f"({ctx.confidence * 100:.1f}%)\nClass probabilities:\n{probs}")
+
+    history = [{"role": m.role, "content": m.content} for m in req.messages[-CHAT_MAX_MESSAGES:]]
+    while history and history[0]["role"] != "user":
+        history.pop(0)
+    if not history:
+        raise HTTPException(status_code=400, detail="The conversation must start with a user message.")
+
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-
-        system = CLINICAL_SYSTEM_PROMPT
-        if req.scan_context:
-            ctx = req.scan_context
-            label_map = {0: "CN — Cognitively Normal", 1: "MCI — Mild Cognitive Impairment", 2: "AD — Alzheimer's Disease"}
-            probs = ctx.all_probabilities
-            prob_lines = "\n".join(
-                f"  - {label_map.get(i, f'Class {i}')}: {p * 100:.1f}%"
-                for i, p in enumerate(probs)
-            ) if probs else "  Not available"
-            system += f"""
-
-Current scan under review:
-  File: {ctx.filename}
-  CNN prediction: {ctx.prediction}
-  Confidence: {ctx.confidence * 100:.1f}%
-  All class probabilities:
-{prob_lines}
-
-Interpret this result in your response."""
-
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
+        response = await _get_chat_client().beta.messages.create(
+            model=CHAT_MODEL,
+            max_tokens=16000,
             system=system,
-            messages=[{"role": m.role, "content": m.content} for m in req.messages],
+            messages=history,
+            output_config={"effort": "medium"},
+            # Server-side refusal fallback: if a safety classifier declines the
+            # request, the API retries it on a fallback model in the same call.
+            betas=["server-side-fallback-2026-07-01"],
+            extra_body={"fallbacks": "default"},
         )
-        return {"content": response.content[0].text}
-
-    except anthropic.APIError as e:
-        logger.error(f"Claude API error: {e}")
+    except anthropic.AuthenticationError:
+        logger.error("Claude API authentication failed; check ANTHROPIC_API_KEY.")
+        raise HTTPException(status_code=500, detail="AI service is misconfigured on the server.")
+    except anthropic.RateLimitError:
+        raise HTTPException(status_code=429, detail="The AI service is busy. Please try again in a minute.")
+    except anthropic.APIStatusError as e:
+        logger.error("Claude API error %s: %s", e.status_code, e.message)
         raise HTTPException(status_code=502, detail="AI service unavailable. Please try again.")
-    except Exception as e:
-        logger.error(f"Chat error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Chat request failed. Please try again.")
+    except anthropic.APIConnectionError:
+        raise HTTPException(status_code=503, detail="Could not reach the AI service. Please try again.")
+
+    if response.stop_reason == "refusal":
+        return {"content": "I can't help with that request. Please rephrase it as a question about the scan or the model."}
+
+    # Thinking is always on for this model, so the first block may be an empty
+    # thinking block. Collect only the text blocks.
+    text = "".join(b.text for b in response.content if b.type == "text").strip()
+    return {"content": text or "I couldn't produce an answer this time. Please try again."}
 
 
 if __name__ == "__main__":

@@ -10,7 +10,8 @@ import {
   Information,
   ChatBot,
 } from '@carbon/icons-react';
-import API_URL from '../config';
+import { getJson, runPrediction, CLASS_COLORS } from '../api';
+import type { DatasetStats } from '../api';
 import './Welcome.scss';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -29,19 +30,23 @@ interface ScanResult {
   confidence: number;
   class_index: number;
   all_probabilities: number[];
+  class_labels?: string[];
 }
+
+const UPLOAD_PROMPT = 'Analyze an MRI scan';
+const STATS_PROMPT = 'Show patient statistics';
 
 // ── Suggested prompts ──────────────────────────────────────────────────────
 const SUGGESTED_PROMPTS = [
   {
     icon: Upload,
-    label: 'Analyze an MRI scan',
-    description: 'Upload a .nii or .nii.gz file for CNN classification',
+    label: UPLOAD_PROMPT,
+    description: 'Upload a T1 .nii or .nii.gz scan for CN vs AD classification',
   },
   {
     icon: Analytics,
-    label: 'Show patient statistics',
-    description: 'Cohort size, scans processed, and model accuracy',
+    label: STATS_PROMPT,
+    description: 'Cohort size, scans available, and validated model performance',
   },
   {
     icon: ChatBot,
@@ -65,17 +70,38 @@ const TypingIndicator = () => (
 );
 
 // ── Scan result card ───────────────────────────────────────────────────────
-const ScanResultCard = ({ prediction, confidence }: { prediction: string; confidence: number }) => (
-  <div className="scan-result-card">
-    <p className="scan-result-label">CNN Classification</p>
-    <p className="scan-result-prediction">{prediction}</p>
-    <div className="scan-result-confidence">
-      <div
-        className="confidence-bar"
-        style={{ width: `${(confidence * 100).toFixed(0)}%` }}
-      />
-      <span>{(confidence * 100).toFixed(1)}% confidence</span>
+const ScanResultCard = ({ result }: { result: ScanResult }) => {
+  const labels = result.class_labels ?? ['CN', 'AD'];
+  return (
+    <div className="scan-result-card">
+      <p className="scan-result-label">Hippocampal ROI classifier</p>
+      <p className="scan-result-prediction">{result.prediction}</p>
+      {result.all_probabilities.map((p, i) => (
+        <div key={labels[i]} className="scan-result-confidence">
+          <span style={{ minWidth: '2rem', fontWeight: 600 }}>{labels[i]}</span>
+          <div className="confidence-track">
+            <div
+              className="confidence-bar"
+              style={{ width: `${(p * 100).toFixed(0)}%`, background: CLASS_COLORS[labels[i]] }}
+            />
+          </div>
+          <span style={{ minWidth: '3rem', textAlign: 'right' }}>{(p * 100).toFixed(1)}%</span>
+        </div>
+      ))}
+      <p className="scan-result-note">Research prototype. Not a diagnosis.</p>
     </div>
+  );
+};
+
+const StatsCard = ({ stats }: { stats: DatasetStats }) => (
+  <div className="scan-result-card">
+    <p className="scan-result-label">Dataset and model</p>
+    <ul className="stats-list">
+      <li><strong>{stats.total_patients.toLocaleString()}</strong> patients and <strong>{stats.total_scans.toLocaleString()}</strong> T1 scans available</li>
+      <li><strong>{stats.training_subjects.toLocaleString()}</strong> subjects used to train and validate the model</li>
+      <li>ROC AUC <strong>{stats.model_auc.toFixed(2)}</strong>, accuracy <strong>{(stats.model_accuracy * 100).toFixed(1)}%</strong></li>
+    </ul>
+    <p className="scan-result-note">See the Data page for the full report and the MRI viewer.</p>
   </div>
 );
 
@@ -90,9 +116,11 @@ const Welcome = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to latest message
+  // Auto-scroll to the latest message. Skip the empty state: scrolling there
+  // moved the whole window and exposed the background above the header.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (messages.length === 0 && !isTyping) return;
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [messages, isTyping]);
 
   const addMessage = (role: 'user' | 'assistant', content: string | React.ReactNode) => {
@@ -107,7 +135,7 @@ const Welcome = () => {
     history: ConversationEntry[],
     context: ScanResult | null = null,
   ): Promise<string> => {
-    const res = await fetch(`${API_URL}/ai/chat`, {
+    const data = await getJson<{ content: string }>('/ai/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -123,12 +151,20 @@ const Welcome = () => {
           : null,
       }),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new Error(err.detail ?? 'Unknown error from /ai/chat');
+    return data.content;
+  };
+
+  const showStats = async () => {
+    addMessage('user', STATS_PROMPT);
+    setIsTyping(true);
+    try {
+      const stats = await getJson<DatasetStats>('/data/stats');
+      addMessage('assistant', <StatsCard stats={stats} />);
+    } catch (err) {
+      addMessage('assistant', `I could not load the statistics: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      setIsTyping(false);
     }
-    const data = await res.json();
-    return data.content as string;
   };
 
   const handleAssistantReply = async (_userText: string, history: ConversationEntry[]) => {
@@ -138,7 +174,7 @@ const Welcome = () => {
       addMessage('assistant', reply);
       setConversationHistory(prev => [...prev, { role: 'assistant', content: reply }]);
     } catch (err) {
-      addMessage('assistant', `Error reaching the AI: ${err instanceof Error ? err.message : err}. Make sure the backend is running and ANTHROPIC_API_KEY is set.`);
+      addMessage('assistant', `I could not reach the AI assistant: ${err instanceof Error ? err.message : err}`);
     } finally {
       setIsTyping(false);
     }
@@ -147,6 +183,15 @@ const Welcome = () => {
   const handleSend = async (text?: string) => {
     const userText = (text ?? input).trim();
     if (!userText || isTyping) return;
+
+    if (userText === UPLOAD_PROMPT) {
+      fileInputRef.current?.click();
+      return;
+    }
+    if (userText === STATS_PROMPT) {
+      await showStats();
+      return;
+    }
 
     setInput('');
     addMessage('user', userText);
@@ -165,32 +210,24 @@ const Welcome = () => {
 
     const userMsg = `Uploaded scan for analysis: ${file.name}`;
     addMessage('user', `Uploading scan: ${file.name}`);
+    addMessage('assistant', 'Aligning the scan to the MNI brain template and extracting the hippocampal region. This usually takes 20 to 60 seconds.');
     setIsTyping(true);
 
     const formData = new FormData();
     formData.append('file', file);
 
     try {
-      const response = await fetch(`${API_URL}/predict`, { method: 'POST', body: formData });
-      if (!response.ok) throw new Error('Prediction request failed');
-      const result = await response.json();
+      const result = await runPrediction<ScanResult & { processing_seconds?: number }>(formData);
 
-      // Show compact CNN result card
-      addMessage('assistant', (
-        <ScanResultCard
-          prediction={result.prediction}
-          confidence={result.confidence}
-        />
-      ));
-
-      // Store scan context for the conversation
       const ctx: ScanResult = {
         filename: file.name,
         prediction: result.prediction,
         confidence: result.confidence,
         class_index: result.class_index,
         all_probabilities: result.all_probabilities ?? [],
+        class_labels: result.class_labels,
       };
+      addMessage('assistant', <ScanResultCard result={ctx} />);
       setScanContext(ctx);
 
       // Build history entry for this exchange and call Claude for enriched interpretation
@@ -207,7 +244,7 @@ const Welcome = () => {
       setConversationHistory(prev => [...prev, { role: 'assistant', content: reply }]);
 
     } catch (error) {
-      addMessage('assistant', `Error analyzing the scan: ${error instanceof Error ? error.message : error}. Please ensure the backend is running and the model is loaded.`);
+      addMessage('assistant', `I could not analyze the scan: ${error instanceof Error ? error.message : error}`);
     } finally {
       setIsTyping(false);
       if (fileInputRef.current) fileInputRef.current.value = '';

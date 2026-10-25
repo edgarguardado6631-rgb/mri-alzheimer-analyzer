@@ -1,0 +1,29 @@
+{
+  "accuracy": 0.5478,
+  "cv_accuracy_mean": 0.5478,
+  "cv_accuracy_std": 0.0494,
+  "roc_auc": 0.5407,
+  "cv_auc_mean": 0.5849,
+  "cv_auc_std": 0.0724,
+  "cv_folds": 5,
+  "evaluation": "patient-level 5-fold CV (OOF), 3D CNN, MNI-registered, binary AD vs CN",
+  "classes": [
+    {
+      "label": "CN (Cognitively Normal)",
+      "precision": 0.57,
+      "recall": 0.83,
+      "f1": 0.68,
+      "support": 312
+    },
+    {
+      "label": "AD (Alzheimer's Disease)",
+      "precision": 0.42,
+      "recall": 0.16,
+      "f1": 0.24,
+      "support": 232
+    }
+  ],
+  "test_samples": 544,
+  "epochs": 15,
+  "model": "3D CNN, MNI-registered vol (64, 64, 64), binary AD vs CN, 5-fold CV"
+}

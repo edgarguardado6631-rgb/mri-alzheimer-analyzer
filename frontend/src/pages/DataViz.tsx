@@ -20,6 +20,8 @@ import {
 } from '@carbon/react';
 import { FolderOpen, Upload } from '@carbon/icons-react';
 import API_URL from '../config';
+import { getJson, classCode, CLASS_COLORS } from '../api';
+import type { DatasetStats, ModelMetrics } from '../api';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type SourceMode = 'server' | 'directory' | 'file';
@@ -35,25 +37,19 @@ const DataViz = () => {
   const [currentSlice, setCurrentSlice] = React.useState<number>(0);
   const [maxSlices, setMaxSlices] = React.useState<number>(100);
   const [loading, setLoading] = React.useState<boolean>(false);
-  const [dashboardStats, setDashboardStats] = React.useState({
+  const [dashboardStats, setDashboardStats] = React.useState<DatasetStats>({
     total_patients: 0,
-    scans_processed: 0,
+    total_scans: 0,
+    training_subjects: 0,
     model_accuracy: 0,
+    model_auc: 0,
   });
   const [demographics, setDemographics] = React.useState<{
     groups: { label: string; count: number }[];
     sex: { label: string; count: number }[];
     age_bins: { label: string; count: number }[];
   }>({ groups: [], sex: [], age_bins: [] });
-  const [modelMetrics, setModelMetrics] = React.useState<{
-    accuracy: number;
-    classes: { label: string; precision: number; recall: number; f1: number; support: number }[];
-    macro_avg: { precision: number; recall: number; f1: number };
-    weighted_avg: { precision: number; recall: number; f1: number };
-    test_samples: number;
-    epochs: number;
-    model: string;
-  } | null>(null);
+  const [modelMetrics, setModelMetrics] = React.useState<ModelMetrics | null>(null);
 
   // ── Source mode state ─────────────────────────────────────────────────────
   const [sourceMode, setSourceMode] = React.useState<SourceMode>('server');
@@ -75,24 +71,20 @@ const DataViz = () => {
 
   // ── Initial data fetch ────────────────────────────────────────────────────
   React.useEffect(() => {
-    fetch(`${API_URL}/data/patients`)
-      .then(res => res.json())
+    getJson<{ patients: string[] }>('/data/patients')
       .then(data => setPatients(data.patients))
       .catch(err => console.error('Failed to fetch patients:', err));
 
-    fetch(`${API_URL}/data/stats`)
-      .then(res => res.json())
-      .then(data => setDashboardStats(data))
+    getJson<DatasetStats>('/data/stats')
+      .then(setDashboardStats)
       .catch(err => console.error('Failed to fetch stats:', err));
 
-    fetch(`${API_URL}/data/demographics`)
-      .then(res => res.json())
-      .then(data => setDemographics(data))
+    getJson<typeof demographics>('/data/demographics')
+      .then(setDemographics)
       .catch(err => console.error('Failed to fetch demographics:', err));
 
-    fetch(`${API_URL}/data/model-metrics`)
-      .then(res => res.json())
-      .then(data => setModelMetrics(data))
+    getJson<ModelMetrics>('/data/model-metrics')
+      .then(setModelMetrics)
       .catch(err => console.error('Failed to fetch model metrics:', err));
   }, []);
 
@@ -100,8 +92,9 @@ const DataViz = () => {
   const fetchMetadata = async (patientId: string, scanFilename: string) => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/data/image/${patientId}/${scanFilename}/metadata`);
-      const data = await res.json();
+      const data = await getJson<{ max_slice: number }>(
+        `/data/image/${encodeURIComponent(patientId)}/${encodeURIComponent(scanFilename)}/metadata`,
+      );
       setMaxSlices(data.max_slice);
       setCurrentSlice(Math.floor(data.max_slice / 2));
     } catch (err) {
@@ -115,8 +108,7 @@ const DataViz = () => {
     setSelectedPatient(patientId);
     setLoading(true);
     try {
-      const scansRes = await fetch(`${API_URL}/data/image/${patientId}/scans`);
-      const scansData = await scansRes.json();
+      const scansData = await getJson<{ scans: string[] }>(`/data/image/${encodeURIComponent(patientId)}/scans`);
       setPatientScans(scansData.scans || []);
       if (scansData.scans && scansData.scans.length > 0) {
         const initialScan = scansData.scans[0];
@@ -193,14 +185,14 @@ const DataViz = () => {
     const map = new Map<string, File[]>();
     for (const f of niiFiles) {
       // webkitRelativePath: "selectedDir/patient/scan.nii.gz"
-      const rel: string = (f as any).webkitRelativePath || f.name;
+      const rel: string = f.webkitRelativePath || f.name;
       const parts = rel.split('/');
       const patient = parts.length >= 2 ? parts[parts.length - 2] : 'Root';
       if (!map.has(patient)) map.set(patient, []);
       map.get(patient)!.push(f);
     }
 
-    const dirName = ((niiFiles[0] as any).webkitRelativePath || '').split('/')[0] || '';
+    const dirName = (niiFiles[0].webkitRelativePath || '').split('/')[0] || '';
     setLocalDirName(dirName);
     setLocalFileMap(map);
     setSelectedPatient(null);
@@ -250,7 +242,7 @@ const DataViz = () => {
 
   const sliceImageSrc =
     sourceMode === 'server'
-      ? `${API_URL}/data/image/${selectedPatient}/${selectedScan}/slice/${currentSlice}`
+      ? `${API_URL}/data/image/${encodeURIComponent(selectedPatient ?? '')}/${encodeURIComponent(selectedScan ?? '')}/slice/${currentSlice}`
       : viewerSessionId
         ? `${API_URL}/data/viewer/${viewerSessionId}/slice/${currentSlice}`
         : '';
@@ -309,28 +301,49 @@ const DataViz = () => {
               <Grid narrow style={{ marginTop: '1.5rem' }}>
                 <Column lg={4} md={4} sm={4}>
                   <Tile>
-                    <Tag type="blue" size="sm">Cohort</Tag>
-                    <p className="cds--type-helper-text-01" style={{ marginTop: '0.75rem', color: 'var(--cds-text-secondary)' }}>Total Patients</p>
-                    <p className="cds--type-productive-heading-06" style={{ marginTop: '0.25rem' }}>{dashboardStats.total_patients}</p>
+                    <Tag type="blue" size="sm">Archive</Tag>
+                    <p className="cds--type-helper-text-01" style={{ marginTop: '0.75rem', color: 'var(--cds-text-secondary)' }}>Patients available</p>
+                    <p className="cds--type-productive-heading-06" style={{ marginTop: '0.25rem' }}>{dashboardStats.total_patients.toLocaleString()}</p>
+                    <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', marginTop: '0.25rem' }}>
+                      {dashboardStats.total_scans.toLocaleString()} T1 scans in the viewer
+                    </p>
                   </Tile>
                 </Column>
                 <Column lg={4} md={4} sm={4}>
                   <Tile>
-                    <Tag type="teal" size="sm">Processed</Tag>
-                    <p className="cds--type-helper-text-01" style={{ marginTop: '0.75rem', color: 'var(--cds-text-secondary)' }}>Scans Analyzed</p>
-                    <p className="cds--type-productive-heading-06" style={{ marginTop: '0.25rem' }}>{dashboardStats.scans_processed.toLocaleString()}</p>
+                    <Tag type="teal" size="sm">Training cohort</Tag>
+                    <p className="cds--type-helper-text-01" style={{ marginTop: '0.75rem', color: 'var(--cds-text-secondary)' }}>Subjects used by the model</p>
+                    <p className="cds--type-productive-heading-06" style={{ marginTop: '0.25rem' }}>{dashboardStats.training_subjects.toLocaleString()}</p>
+                    {modelMetrics?.cohort && (
+                      <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', marginTop: '0.25rem' }}>
+                        {modelMetrics.cohort.CN} CN and {modelMetrics.cohort.AD} AD, one scan each
+                      </p>
+                    )}
                   </Tile>
                 </Column>
                 <Column lg={8} md={8} sm={4}>
                   <Tile>
-                    <Tag type="green" size="sm">CNN Model</Tag>
-                    <p className="cds--type-helper-text-01" style={{ marginTop: '0.75rem', color: 'var(--cds-text-secondary)' }}>Overall Accuracy</p>
-                    <p className="cds--type-productive-heading-06" style={{ marginTop: '0.25rem' }}>
-                      {(dashboardStats.model_accuracy * 100).toFixed(1)}%
-                    </p>
+                    <Tag type="green" size="sm">Model, CN vs AD</Tag>
+                    <div style={{ display: 'flex', gap: '2.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
+                      <div>
+                        <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)' }}>ROC AUC</p>
+                        <p className="cds--type-productive-heading-06" style={{ marginTop: '0.25rem' }}>
+                          {dashboardStats.model_auc.toFixed(2)}
+                          {modelMetrics?.cv_auc_std !== undefined && (
+                            <span className="cds--type-body-short-01" style={{ color: 'var(--cds-text-secondary)' }}> ± {modelMetrics.cv_auc_std.toFixed(2)}</span>
+                          )}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)' }}>Accuracy</p>
+                        <p className="cds--type-productive-heading-06" style={{ marginTop: '0.25rem' }}>
+                          {(dashboardStats.model_accuracy * 100).toFixed(1)}%
+                        </p>
+                      </div>
+                    </div>
                     {modelMetrics && (
                       <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', marginTop: '0.25rem' }}>
-                        {modelMetrics.model} · {modelMetrics.epochs} epochs · {modelMetrics.test_samples} test samples
+                        {modelMetrics.model}. Patient-level {modelMetrics.cv_folds ?? 5}-fold cross-validation.
                       </p>
                     )}
                   </Tile>
@@ -345,7 +358,7 @@ const DataViz = () => {
                         <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Diagnosis Group</p>
                         {(() => {
                           const max = Math.max(...demographics.groups.map(g => g.count), 1);
-                          const colors: Record<string, string> = { CN: 'var(--cds-support-success)', MCI: 'var(--cds-support-warning)', AD: 'var(--cds-support-error)' };
+                          const colors = CLASS_COLORS;
                           return demographics.groups.map(g => (
                             <div key={g.label} style={{ marginBottom: '0.75rem' }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
@@ -407,17 +420,12 @@ const DataViz = () => {
                     <Tile>
                       <p className="cds--type-productive-heading-02" style={{ marginBottom: '0.25rem' }}>Per-Class Performance</p>
                       <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', marginBottom: '1.5rem' }}>
-                        Classification report — {modelMetrics.model} · {modelMetrics.epochs} epochs · {modelMetrics.test_samples} test samples
+                        Out-of-fold predictions for all {modelMetrics.test_samples} subjects. Every subject was scored by a model that never saw them during training.
                       </p>
 
                       {(() => {
-                        const classColors: Record<string, string> = {
-                          CN: 'var(--cds-support-success)',
-                          MCI: 'var(--cds-support-warning)',
-                          AD: 'var(--cds-support-error)',
-                        };
                         return modelMetrics.classes.map((cls) => {
-                          const color = classColors[cls.label] ?? 'var(--cds-link-primary)';
+                          const color = CLASS_COLORS[classCode(cls.label)] ?? 'var(--cds-link-primary)';
                           return (
                             <div key={cls.label} style={{ marginBottom: '1.5rem', paddingBottom: '1.5rem', borderBottom: '1px solid var(--cds-border-subtle-01)' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
@@ -452,9 +460,9 @@ const DataViz = () => {
                         ))}
                       </div>
                       {[
-                        { label: 'Macro avg', ...modelMetrics.macro_avg },
-                        { label: 'Weighted avg', ...modelMetrics.weighted_avg },
-                      ].map(row => (
+                        modelMetrics.macro_avg && { label: 'Macro avg', ...modelMetrics.macro_avg },
+                        modelMetrics.weighted_avg && { label: 'Weighted avg', ...modelMetrics.weighted_avg },
+                      ].filter((r): r is { label: string; precision: number; recall: number; f1: number } => Boolean(r)).map(row => (
                         <div key={row.label} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: '0.5rem', padding: '0.5rem 0', borderBottom: '1px solid var(--cds-border-subtle-00)' }}>
                           <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)' }}>{row.label}</p>
                           <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)' }}>{row.precision.toFixed(2)}</p>
@@ -463,6 +471,62 @@ const DataViz = () => {
                           <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)' }}>{modelMetrics.test_samples}</p>
                         </div>
                       ))}
+                    </Tile>
+                  </Column>
+                )}
+
+                {modelMetrics?.confusion_matrix && (
+                  <Column lg={6} md={8} sm={4} style={{ marginTop: '1rem' }}>
+                    <Tile style={{ height: '100%' }}>
+                      <p className="cds--type-productive-heading-02" style={{ marginBottom: '0.25rem' }}>Confusion Matrix</p>
+                      <p className="cds--type-helper-text-01" style={{ color: 'var(--cds-text-secondary)', marginBottom: '1.25rem' }}>
+                        Rows are the true diagnosis, columns the prediction.
+                      </p>
+                      {(() => {
+                        const { labels, matrix } = modelMetrics.confusion_matrix!;
+                        const max = Math.max(...matrix.flat(), 1);
+                        return (
+                          <div style={{ display: 'grid', gridTemplateColumns: `4rem repeat(${labels.length}, 1fr)`, gap: '4px' }}>
+                            <span />
+                            {labels.map(l => (
+                              <span key={`h-${l}`} className="cds--type-helper-text-01" style={{ textAlign: 'center', color: 'var(--cds-text-secondary)' }}>Pred. {l}</span>
+                            ))}
+                            {matrix.map((row, i) => (
+                              <React.Fragment key={labels[i]}>
+                                <span className="cds--type-helper-text-01" style={{ alignSelf: 'center', color: 'var(--cds-text-secondary)' }}>True {labels[i]}</span>
+                                {row.map((v, j) => (
+                                  <div
+                                    key={j}
+                                    style={{
+                                      padding: '1rem 0',
+                                      textAlign: 'center',
+                                      fontWeight: 600,
+                                      background: i === j
+                                        ? `color-mix(in srgb, var(--cds-support-success) ${20 + (v / max) * 50}%, transparent)`
+                                        : `color-mix(in srgb, var(--cds-support-error) ${10 + (v / max) * 40}%, transparent)`,
+                                    }}
+                                  >
+                                    {v}
+                                  </div>
+                                ))}
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </Tile>
+                  </Column>
+                )}
+
+                {modelMetrics?.preprocessing && (
+                  <Column lg={10} md={8} sm={4} style={{ marginTop: '1rem' }}>
+                    <Tile style={{ height: '100%' }}>
+                      <p className="cds--type-productive-heading-02" style={{ marginBottom: '1rem' }}>How each scan is prepared</p>
+                      <ol style={{ listStyle: 'decimal', paddingLeft: '1.25rem' }}>
+                        {modelMetrics.preprocessing.map(step => (
+                          <li key={step} className="cds--type-body-short-01" style={{ marginBottom: '0.5rem' }}>{step}</li>
+                        ))}
+                      </ol>
                     </Tile>
                   </Column>
                 )}
